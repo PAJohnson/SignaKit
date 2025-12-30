@@ -1,0 +1,47 @@
+packets:
+- id: IMU
+  header_string: IMU
+  size_check: 36
+  time_field: time
+  fields:
+  - name: time
+    type: double
+    offset: 4
+  - name: accelX
+    type: float
+    offset: 12
+  - name: accelY
+    type: float
+    offset: 16
+  - name: accelZ
+    type: float
+    offset: 20
+  - name: gyroX
+    type: float
+    offset: 24
+  - name: gyroY
+    type: float
+    offset: 28
+  - name: gyroZ
+    type: float
+    offset: 32
+- id: GPS
+  header_string: GPS
+  size_check: 36
+  time_field: time
+  fields:
+  - name: time
+    type: double
+    offset: 4
+  - name: latitude
+    type: double
+    offset: 12
+  - name: longitude
+    type: double
+    offset: 20
+  - name: altitude
+    type: float
+    offset: 28
+  - name: speed
+    type: float
+    offset: 32
