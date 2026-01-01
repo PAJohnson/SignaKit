@@ -27,8 +27,10 @@
 #else
 #include <arpa/inet.h>
 #include <cstring>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <errno.h>
 #endif
 
 // telemetry_defs.h removed as we now use dynamic loading.
@@ -79,6 +81,13 @@ struct PlotWindow {
 // -------------------------------------------------------------------------
 std::mutex stateMutex;
 std::atomic<bool> appRunning(true);
+
+// Network connection state
+std::atomic<bool> networkConnected(false);
+std::atomic<bool> networkShouldConnect(false);
+std::mutex networkConfigMutex;
+std::string networkIP = "localhost";
+int networkPort = UDP_PORT;
 
 // The Registry: Maps a string ID to the actual data buffer
 std::map<std::string, Signal> signalRegistry;
@@ -196,81 +205,179 @@ void NetworkReceiverThread() {
   }
 
 #ifdef _WIN32
-  SOCKET sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-  if (sockfd == INVALID_SOCKET)
-    return;
+  SOCKET sockfd = INVALID_SOCKET;
 #else
-  int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-  if (sockfd < 0)
-    return;
+  int sockfd = -1;
 #endif
-
-  sockaddr_in servaddr;
-  memset(&servaddr, 0, sizeof(servaddr));
-  servaddr.sin_family = AF_INET;
-  servaddr.sin_addr.s_addr = INADDR_ANY;
-  servaddr.sin_port = htons(UDP_PORT);
-
-  if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-#ifdef _WIN32
-    closesocket(sockfd);
-#else
-    close(sockfd);
-#endif
-    return;
-  }
 
   char buffer[1024];
+
   while (appRunning) {
+    // Check if we should connect
+    if (networkShouldConnect && !networkConnected) {
+      // Get connection parameters
+      std::string ip;
+      int port;
+      {
+        std::lock_guard<std::mutex> lock(networkConfigMutex);
+        ip = networkIP;
+        port = networkPort;
+      }
+
+      // Create socket
 #ifdef _WIN32
-    int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+      sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+      if (sockfd == INVALID_SOCKET) {
+        printf("Failed to create socket\n");
+        networkShouldConnect = false;
+        continue;
+      }
+
+      // Set socket to non-blocking mode
+      u_long mode = 1;
+      ioctlsocket(sockfd, FIONBIO, &mode);
 #else
-    ssize_t len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+      sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+      if (sockfd < 0) {
+        printf("Failed to create socket\n");
+        networkShouldConnect = false;
+        continue;
+      }
+
+      // Set socket to non-blocking mode
+      int flags = fcntl(sockfd, F_GETFL, 0);
+      fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 #endif
-    if (len > 0) {
-      std::lock_guard<std::mutex> lock(stateMutex);
 
-      // Dynamic Packet Parsing
-      for (const auto &pkt : packets) {
-        // Basic check: length and header string
-        if (len == (int)pkt.sizeCheck) {
-          if (strncmp(buffer, pkt.headerString.c_str(),
-                      pkt.headerString.length()) == 0) {
+      // Setup address
+      sockaddr_in servaddr;
+      memset(&servaddr, 0, sizeof(servaddr));
+      servaddr.sin_family = AF_INET;
+      servaddr.sin_port = htons(port);
 
-            // Optimize: Map packet ID to relevant signals beforehand?
-            // For now, iterating signals is fine for small count.
-            for (const auto &sig : signals) {
-              if (sig.packetId == pkt.id) {
-                // Find fields
-                const PacketDefinition::Field *timeField = nullptr;
-                const PacketDefinition::Field *valField = nullptr;
+      // Convert IP address
+      if (ip == "localhost" || ip == "127.0.0.1") {
+        servaddr.sin_addr.s_addr = INADDR_ANY;
+      } else {
+        inet_pton(AF_INET, ip.c_str(), &servaddr.sin_addr);
+      }
 
-                for (const auto &f : pkt.fields) {
-                  if (f.name == sig.timeField)
-                    timeField = &f;
-                  if (f.name == sig.valueField)
-                    valField = &f;
-                }
+      // Bind socket
+      if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+        printf("Failed to bind socket to %s:%d\n", ip.c_str(), port);
+#ifdef _WIN32
+        closesocket(sockfd);
+        sockfd = INVALID_SOCKET;
+#else
+        close(sockfd);
+        sockfd = -1;
+#endif
+        networkShouldConnect = false;
+        continue;
+      }
 
-                if (timeField && valField) {
-                  double t = ReadValue(buffer, *timeField);
-                  double v = ReadValue(buffer, *valField);
-                  signalRegistry[sig.key].AddPoint(t, v);
+      networkConnected = true;
+      printf("Connected to %s:%d\n", ip.c_str(), port);
+    }
+
+    // Check if we should disconnect
+    if (!networkShouldConnect && networkConnected) {
+#ifdef _WIN32
+      if (sockfd != INVALID_SOCKET) {
+        closesocket(sockfd);
+        sockfd = INVALID_SOCKET;
+      }
+#else
+      if (sockfd >= 0) {
+        close(sockfd);
+        sockfd = -1;
+      }
+#endif
+      networkConnected = false;
+      printf("Disconnected\n");
+    }
+
+    // Receive data if connected
+    if (networkConnected) {
+#ifdef _WIN32
+      int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+      if (len == SOCKET_ERROR) {
+        int error = WSAGetLastError();
+        if (error != WSAEWOULDBLOCK) {
+          // Real error occurred
+          printf("Socket error: %d\n", error);
+        }
+        // Sleep briefly to avoid busy-waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+      }
+#else
+      ssize_t len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+      if (len < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          // Real error occurred
+          printf("Socket error: %d\n", errno);
+        }
+        // Sleep briefly to avoid busy-waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+      }
+#endif
+
+      if (len > 0) {
+        std::lock_guard<std::mutex> lock(stateMutex);
+
+        // Dynamic Packet Parsing
+        for (const auto &pkt : packets) {
+          // Basic check: length and header string
+          if (len == (int)pkt.sizeCheck) {
+            if (strncmp(buffer, pkt.headerString.c_str(),
+                        pkt.headerString.length()) == 0) {
+
+              // Optimize: Map packet ID to relevant signals beforehand?
+              // For now, iterating signals is fine for small count.
+              for (const auto &sig : signals) {
+                if (sig.packetId == pkt.id) {
+                  // Find fields
+                  const PacketDefinition::Field *timeField = nullptr;
+                  const PacketDefinition::Field *valField = nullptr;
+
+                  for (const auto &f : pkt.fields) {
+                    if (f.name == sig.timeField)
+                      timeField = &f;
+                    if (f.name == sig.valueField)
+                      valField = &f;
+                  }
+
+                  if (timeField && valField) {
+                    double t = ReadValue(buffer, *timeField);
+                    double v = ReadValue(buffer, *valField);
+                    signalRegistry[sig.key].AddPoint(t, v);
+                  }
                 }
               }
-            }
 
-            // Break after finding the matching packet type for this buffer
-            break;
+              // Break after finding the matching packet type for this buffer
+              break;
+            }
           }
         }
       }
+    } else {
+      // Not connected, sleep to avoid busy-waiting
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
+
+  // Cleanup on exit
 #ifdef _WIN32
-  closesocket(sockfd);
+  if (sockfd != INVALID_SOCKET) {
+    closesocket(sockfd);
+  }
 #else
-  close(sockfd);
+  if (sockfd >= 0) {
+    close(sockfd);
+  }
 #endif
 }
 
@@ -336,10 +443,72 @@ void MainLoopStep(void *arg) {
   std::lock_guard<std::mutex> lock(stateMutex);
 
   // ---------------------------------------------------------
+  // UI: MENU BAR
+  // ---------------------------------------------------------
+  static char ipBuffer[64] = "localhost";
+  static char portBuffer[16] = "5000";
+  static bool buffersInitialized = false;
+
+  // Initialize buffers once with current values
+  if (!buffersInitialized) {
+    std::lock_guard<std::mutex> lock(networkConfigMutex);
+    strncpy(ipBuffer, networkIP.c_str(), sizeof(ipBuffer) - 1);
+    snprintf(portBuffer, sizeof(portBuffer), "%d", networkPort);
+    buffersInitialized = true;
+  }
+
+  if (ImGui::BeginMainMenuBar()) {
+    if (ImGui::BeginMenu("File")) {
+      if (ImGui::MenuItem("Close")) {
+        appRunning = false;
+      }
+      ImGui::EndMenu();
+    }
+
+    // Add spacing
+    ImGui::Separator();
+
+    // IP input
+    ImGui::Text("IP:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(150);
+    ImGui::InputText("##IP", ipBuffer, sizeof(ipBuffer));
+
+    // Port input
+    ImGui::SameLine();
+    ImGui::Text("Port:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    ImGui::InputText("##Port", portBuffer, sizeof(portBuffer), ImGuiInputTextFlags_CharsDecimal);
+
+    // Connect/Disconnect button
+    ImGui::SameLine();
+    bool isConnected = networkConnected.load();
+    const char* buttonText = isConnected ? "Disconnect" : "Connect";
+    if (ImGui::Button(buttonText)) {
+      if (isConnected) {
+        // Disconnect
+        networkShouldConnect = false;
+      } else {
+        // Update connection parameters and connect
+        {
+          std::lock_guard<std::mutex> lock(networkConfigMutex);
+          networkIP = std::string(ipBuffer);
+          networkPort = atoi(portBuffer);
+        }
+        networkShouldConnect = true;
+      }
+    }
+
+    ImGui::EndMainMenuBar();
+  }
+
+  // ---------------------------------------------------------
   // UI: LEFT PANEL (Signal List)
   // ---------------------------------------------------------
-  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowSize(ImVec2(300, 720), ImGuiCond_FirstUseEver);
+  float menuBarHeight = ImGui::GetFrameHeight();
+  ImGui::SetNextWindowPos(ImVec2(0, menuBarHeight), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(300, io.DisplaySize.y - menuBarHeight), ImGuiCond_FirstUseEver);
 
   ImGui::Begin("Signal Browser");
   ImGui::Text("Available Signals");
@@ -383,6 +552,10 @@ void MainLoopStep(void *arg) {
   for (auto &plot : activePlots) {
     if (!plot.isOpen)
       continue;
+
+    // Set initial position below menu bar for new plot windows
+    ImGui::SetNextWindowPos(ImVec2(350, menuBarHeight + 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
 
     ImGui::Begin(plot.title.c_str(), &plot.isOpen);
 
