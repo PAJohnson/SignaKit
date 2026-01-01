@@ -148,14 +148,18 @@ void NetworkReceiverThread() {
 
   char buffer[1024];
   while (appRunning) {
+#ifdef _WIN32
+    int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+#else
     ssize_t len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+#endif
     if (len > 0) {
       std::lock_guard<std::mutex> lock(stateMutex);
 
       // Dynamic Packet Parsing
       for (const auto &pkt : packets) {
         // Basic check: length and header string
-        if (len == (ssize_t)pkt.sizeCheck) {
+        if (len == (int)pkt.sizeCheck) {
           if (strncmp(buffer, pkt.headerString.c_str(),
                       pkt.headerString.length()) == 0) {
 
@@ -394,8 +398,10 @@ void MainLoopStep(void *arg) {
 // -------------------------------------------------------------------------
 int main(int, char **) {
   // Setup SDL
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0)
+  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
+    printf("Error: SDL_Init failed: %s\n", SDL_GetError());
     return -1;
+  }
 
 #ifdef _WIN32
   WSADATA wsaData;
@@ -425,7 +431,20 @@ int main(int, char **) {
   SDL_Window *window =
       SDL_CreateWindow("Telemetry Analyzer", SDL_WINDOWPOS_CENTERED,
                        SDL_WINDOWPOS_CENTERED, 1600, 900, window_flags);
+  if (window == NULL) {
+    printf("Error: SDL_CreateWindow failed: %s\n", SDL_GetError());
+    SDL_Quit();
+    return -1;
+  }
+
   SDL_GLContext gl_context = SDL_GL_CreateContext(window);
+  if (gl_context == NULL) {
+    printf("Error: SDL_GL_CreateContext failed: %s\n", SDL_GetError());
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    return -1;
+  }
+
   SDL_GL_MakeCurrent(window, gl_context);
   SDL_GL_SetSwapInterval(1);
 
@@ -442,9 +461,13 @@ int main(int, char **) {
 
   // 1. Load a bigger, smoother font
 #ifdef __EMSCRIPTEN__
-  io.Fonts->AddFontFromFileTTF("fonts/Roboto-Medium.ttf", 20.0f);
+  if (!io.Fonts->AddFontFromFileTTF("fonts/Roboto-Medium.ttf", 20.0f)) {
+    printf("Warning: Could not load font fonts/Roboto-Medium.ttf, using default font\n");
+  }
 #else
-  io.Fonts->AddFontFromFileTTF("../imgui/misc/fonts/Roboto-Medium.ttf", 20.0f);
+  if (!io.Fonts->AddFontFromFileTTF("Roboto-Medium.ttf", 20.0f)) {
+    printf("Warning: Could not load font Roboto-Medium.ttf, using default font\n");
+  }
 #endif
 
   // 2. Apply our custom visual style

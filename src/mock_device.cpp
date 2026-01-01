@@ -4,11 +4,18 @@
 #include <thread>
 #include <chrono>
 #include <atomic>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
-#include "../include/telemetry_defs.h"
+#include "telemetry_defs.h"
 
 #define DEST_IP "127.0.0.1"
 #define DEST_PORT 5000
@@ -23,7 +30,11 @@ double get_time() {
     return duration<double>(now - start).count();
 }
 
+#ifdef _WIN32
+void imu_thread_func(SOCKET sockfd, sockaddr_in dest_addr) {
+#else
 void imu_thread_func(int sockfd, sockaddr_in dest_addr) {
+#endif
     IMUData packet;
     // Ensure header is set (in case of compiler quirks)
     memcpy(packet.header, "IMU", 4); 
@@ -43,7 +54,7 @@ void imu_thread_func(int sockfd, sockaddr_in dest_addr) {
         packet.gyroY = 0.0f;
         packet.gyroZ = 0.0f;
 
-        sendto(sockfd, &packet, sizeof(packet), 0, 
+        sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
 
         // ~100Hz
@@ -51,7 +62,11 @@ void imu_thread_func(int sockfd, sockaddr_in dest_addr) {
     }
 }
 
+#ifdef _WIN32
+void gps_thread_func(SOCKET sockfd, sockaddr_in dest_addr) {
+#else
 void gps_thread_func(int sockfd, sockaddr_in dest_addr) {
+#endif
     GPSData packet;
     memcpy(packet.header, "GPS", 4);
 
@@ -70,7 +85,7 @@ void gps_thread_func(int sockfd, sockaddr_in dest_addr) {
         packet.altitude = 100.0f + (float)sin(t) * 5.0f;
         packet.speed = 25.0f;
 
-        sendto(sockfd, &packet, sizeof(packet), 0, 
+        sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
 
         // ~10Hz
@@ -79,12 +94,26 @@ void gps_thread_func(int sockfd, sockaddr_in dest_addr) {
 }
 
 int main() {
-    // Setup UDP Socket
+#ifdef _WIN32
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        std::cerr << "WSAStartup failed" << std::endl;
+        return 1;
+    }
+
+    SOCKET sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd == INVALID_SOCKET) {
+        std::cerr << "Socket creation failed" << std::endl;
+        WSACleanup();
+        return 1;
+    }
+#else
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("Socket creation failed");
         return 1;
     }
+#endif
 
     sockaddr_in dest_addr;
     memset(&dest_addr, 0, sizeof(dest_addr));
@@ -102,6 +131,11 @@ int main() {
     imuThread.join();
     gpsThread.join();
 
+#ifdef _WIN32
+    closesocket(sockfd);
+    WSACleanup();
+#else
     close(sockfd);
+#endif
     return 0;
 }
