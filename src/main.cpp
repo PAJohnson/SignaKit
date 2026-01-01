@@ -254,13 +254,6 @@ void MainLoopStep(void *arg) {
     return;
   }
 
-  SDL_Event event;
-  while (SDL_PollEvent(&event)) {
-    ImGui_ImplSDL2_ProcessEvent(&event);
-    if (event.type == SDL_QUIT)
-      appRunning = false;
-  }
-
   ImGui_ImplOpenGL3_NewFrame();
   ImGui_ImplSDL2_NewFrame();
   ImGui::NewFrame();
@@ -448,6 +441,12 @@ int main(int, char **) {
   SDL_GL_MakeCurrent(window, gl_context);
   SDL_GL_SetSwapInterval(1);
 
+#ifdef _WIN32
+  // Windows-specific hints for smoother vsync and timing
+  SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
+  SDL_SetHint(SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING, "0");
+#endif
+
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImPlot::CreateContext();
@@ -494,7 +493,19 @@ int main(int, char **) {
   emscripten_set_main_loop_arg(MainLoopStep, &ctx, 0, 1);
 #else
   std::thread receiver(NetworkReceiverThread);
+  SDL_Event event;
   while (appRunning) {
+    // Use SDL_WaitEventTimeout to reduce CPU usage when idle
+    // 16ms timeout targets ~60 FPS, allowing the OS to idle the thread
+    if (SDL_WaitEventTimeout(&event, 16)) {
+      // Process the event that woke us up
+      do {
+        ImGui_ImplSDL2_ProcessEvent(&event);
+        if (event.type == SDL_QUIT)
+          appRunning = false;
+      } while (SDL_PollEvent(&event)); // Drain any remaining events
+    }
+
     MainLoopStep(&ctx);
   }
   if (receiver.joinable())
