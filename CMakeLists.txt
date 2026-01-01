@@ -3,6 +3,19 @@ project(TelemetryGui)
 
 set(CMAKE_CXX_STANDARD 17)
 
+# Enable Link Time Optimization (LTO/IPO) for smaller binaries
+# Only enable for Release builds to avoid debug build issues
+include(CheckIPOSupported)
+check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+if(ipo_supported)
+    message(STATUS "Link-time optimization (LTO) enabled for Release builds")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL TRUE)
+else()
+    message(STATUS "Link-time optimization (LTO) not supported: ${ipo_error}")
+endif()
+
 # 1. Find System Packages
 # 1. Find System Packages
 if(EMSCRIPTEN)
