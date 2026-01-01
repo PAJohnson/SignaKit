@@ -6,9 +6,14 @@
 #include <SDL_opengl.h>
 #include <algorithm> // For std::find
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
 #include <map>
 #include <mutex>
+#include <sstream>
 #include <stdio.h>
 #include <string>
 #include <thread>
@@ -89,6 +94,10 @@ std::mutex networkConfigMutex;
 std::string networkIP = "localhost";
 int networkPort = UDP_PORT;
 
+// Data logging state
+std::ofstream logFile;
+std::mutex logFileMutex;
+
 // The Registry: Maps a string ID to the actual data buffer
 std::map<std::string, Signal> signalRegistry;
 
@@ -99,6 +108,30 @@ int nextPlotId = 1; // Auto-increment ID for window titles
 // -------------------------------------------------------------------------
 // NETWORK THREAD
 // -------------------------------------------------------------------------
+// Helper to generate timestamped filename
+std::string GenerateLogFilename() {
+  auto now = std::chrono::system_clock::now();
+  auto time_t_now = std::chrono::system_clock::to_time_t(now);
+  std::tm tm_utc;
+#ifdef _WIN32
+  gmtime_s(&tm_utc, &time_t_now);
+#else
+  gmtime_r(&time_t_now, &tm_utc);
+#endif
+
+  std::ostringstream oss;
+  oss << std::setfill('0')
+      << std::setw(2) << (tm_utc.tm_mon + 1)
+      << std::setw(2) << tm_utc.tm_mday
+      << std::setw(4) << (tm_utc.tm_year + 1900)
+      << "_"
+      << std::setw(2) << tm_utc.tm_hour
+      << std::setw(2) << tm_utc.tm_min
+      << std::setw(2) << tm_utc.tm_sec
+      << ".bin";
+  return oss.str();
+}
+
 // Helper to read a value from the buffer based on type
 // Supports all stdint.h types plus legacy C types for backwards compatibility
 // All values are cast to double for storage in the signal buffers
@@ -278,6 +311,18 @@ void NetworkReceiverThread() {
 
       networkConnected = true;
       printf("Connected to %s:%d\n", ip.c_str(), port);
+
+      // Open log file
+      {
+        std::lock_guard<std::mutex> lock(logFileMutex);
+        std::string filename = GenerateLogFilename();
+        logFile.open(filename, std::ios::binary);
+        if (logFile.is_open()) {
+          printf("Logging to file: %s\n", filename.c_str());
+        } else {
+          printf("Failed to open log file: %s\n", filename.c_str());
+        }
+      }
     }
 
     // Check if we should disconnect
@@ -295,74 +340,106 @@ void NetworkReceiverThread() {
 #endif
       networkConnected = false;
       printf("Disconnected\n");
+
+      // Close log file
+      {
+        std::lock_guard<std::mutex> lock(logFileMutex);
+        if (logFile.is_open()) {
+          logFile.close();
+          printf("Log file closed\n");
+        }
+      }
     }
 
     // Receive data if connected
     if (networkConnected) {
+      bool dataAvailable = true;
+
+      // Process all available packets before sleeping
+      while (dataAvailable && networkConnected) {
 #ifdef _WIN32
-      int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
-      if (len == SOCKET_ERROR) {
-        int error = WSAGetLastError();
-        if (error != WSAEWOULDBLOCK) {
-          // Real error occurred
-          printf("Socket error: %d\n", error);
+        int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+        if (len == SOCKET_ERROR) {
+          int error = WSAGetLastError();
+          if (error == WSAEWOULDBLOCK) {
+            // No more data available
+            dataAvailable = false;
+          } else {
+            // Real error occurred
+            printf("Socket error: %d\n", error);
+            dataAvailable = false;
+          }
+          break;
         }
-        // Sleep briefly to avoid busy-waiting
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        continue;
-      }
 #else
-      ssize_t len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
-      if (len < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          // Real error occurred
-          printf("Socket error: %d\n", errno);
+        ssize_t len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+        if (len < 0) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // No more data available
+            dataAvailable = false;
+          } else {
+            // Real error occurred
+            printf("Socket error: %d\n", errno);
+            dataAvailable = false;
+          }
+          break;
         }
-        // Sleep briefly to avoid busy-waiting
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        continue;
-      }
 #endif
 
-      if (len > 0) {
-        std::lock_guard<std::mutex> lock(stateMutex);
-
-        // Dynamic Packet Parsing
-        for (const auto &pkt : packets) {
-          // Basic check: length and header string
-          if (len == (int)pkt.sizeCheck) {
-            if (strncmp(buffer, pkt.headerString.c_str(),
-                        pkt.headerString.length()) == 0) {
-
-              // Optimize: Map packet ID to relevant signals beforehand?
-              // For now, iterating signals is fine for small count.
-              for (const auto &sig : signals) {
-                if (sig.packetId == pkt.id) {
-                  // Find fields
-                  const PacketDefinition::Field *timeField = nullptr;
-                  const PacketDefinition::Field *valField = nullptr;
-
-                  for (const auto &f : pkt.fields) {
-                    if (f.name == sig.timeField)
-                      timeField = &f;
-                    if (f.name == sig.valueField)
-                      valField = &f;
-                  }
-
-                  if (timeField && valField) {
-                    double t = ReadValue(buffer, *timeField);
-                    double v = ReadValue(buffer, *valField);
-                    signalRegistry[sig.key].AddPoint(t, v);
-                  }
-                }
-              }
-
-              // Break after finding the matching packet type for this buffer
-              break;
+        if (len > 0) {
+          // Log raw packet to file
+          {
+            std::lock_guard<std::mutex> lock(logFileMutex);
+            if (logFile.is_open()) {
+              logFile.write(buffer, len);
             }
           }
+
+          std::lock_guard<std::mutex> lock(stateMutex);
+
+          // Dynamic Packet Parsing
+          for (const auto &pkt : packets) {
+            // Basic check: length and header string
+            if (len == (int)pkt.sizeCheck) {
+              if (strncmp(buffer, pkt.headerString.c_str(),
+                          pkt.headerString.length()) == 0) {
+
+                // Optimize: Map packet ID to relevant signals beforehand?
+                // For now, iterating signals is fine for small count.
+                for (const auto &sig : signals) {
+                  if (sig.packetId == pkt.id) {
+                    // Find fields
+                    const PacketDefinition::Field *timeField = nullptr;
+                    const PacketDefinition::Field *valField = nullptr;
+
+                    for (const auto &f : pkt.fields) {
+                      if (f.name == sig.timeField)
+                        timeField = &f;
+                      if (f.name == sig.valueField)
+                        valField = &f;
+                    }
+
+                    if (timeField && valField) {
+                      double t = ReadValue(buffer, *timeField);
+                      double v = ReadValue(buffer, *valField);
+                      signalRegistry[sig.key].AddPoint(t, v);
+                    }
+                  }
+                }
+
+                // Break after finding the matching packet type for this buffer
+                break;
+              }
+            }
+          }
+        } else {
+          // len == 0, connection closed
+          dataAvailable = false;
         }
       }
+
+      // Sleep briefly after processing all available packets
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     } else {
       // Not connected, sleep to avoid busy-waiting
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
