@@ -2,6 +2,7 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
 #include "implot.h"
+#include "ImGuiFileDialog.h"
 #include <SDL.h>
 #include <SDL_opengl.h>
 #include <algorithm> // For std::find
@@ -217,6 +218,87 @@ double ReadValue(const char *buffer, const PacketDefinition::Field &field) {
   fprintf(stderr, "Warning: Unknown field type '%s' for field '%s'\n",
           field.type.c_str(), field.name.c_str());
   return 0.0;
+}
+
+// -------------------------------------------------------------------------
+// LAYOUT SAVE/LOAD
+// -------------------------------------------------------------------------
+bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots) {
+  try {
+    YAML::Emitter out;
+    out << YAML::BeginMap;
+    out << YAML::Key << "plots" << YAML::Value << YAML::BeginSeq;
+
+    for (const auto &plot : plots) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << plot.id;
+      out << YAML::Key << "title" << YAML::Value << plot.title;
+      out << YAML::Key << "paused" << YAML::Value << plot.paused;
+      out << YAML::Key << "signals" << YAML::Value << YAML::BeginSeq;
+      for (const auto &signal : plot.signalNames) {
+        out << signal;
+      }
+      out << YAML::EndSeq;
+      out << YAML::EndMap;
+    }
+
+    out << YAML::EndSeq;
+    out << YAML::EndMap;
+
+    std::ofstream fout(filename);
+    if (!fout.is_open()) {
+      fprintf(stderr, "Failed to open file for writing: %s\n", filename.c_str());
+      return false;
+    }
+
+    fout << out.c_str();
+    fout.close();
+    printf("Layout saved to: %s\n", filename.c_str());
+    return true;
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Error saving layout: %s\n", e.what());
+    return false;
+  }
+}
+
+bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int &nextId) {
+  try {
+    YAML::Node config = YAML::LoadFile(filename);
+    if (!config["plots"]) {
+      fprintf(stderr, "Invalid layout file: missing 'plots' key\n");
+      return false;
+    }
+
+    std::vector<PlotWindow> loadedPlots;
+    int maxId = 0;
+
+    for (const auto &plotNode : config["plots"]) {
+      PlotWindow plot;
+      plot.id = plotNode["id"].as<int>();
+      plot.title = plotNode["title"].as<std::string>();
+      plot.paused = plotNode["paused"] ? plotNode["paused"].as<bool>() : false;
+      plot.isOpen = true;
+
+      if (plotNode["signals"]) {
+        for (const auto &signalNode : plotNode["signals"]) {
+          plot.signalNames.push_back(signalNode.as<std::string>());
+        }
+      }
+
+      loadedPlots.push_back(plot);
+      if (plot.id > maxId) {
+        maxId = plot.id;
+      }
+    }
+
+    plots = loadedPlots;
+    nextId = maxId + 1;
+    printf("Layout loaded from: %s\n", filename.c_str());
+    return true;
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Error loading layout: %s\n", e.what());
+    return false;
+  }
 }
 
 void NetworkReceiverThread() {
@@ -536,6 +618,17 @@ void MainLoopStep(void *arg) {
 
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
+      if (ImGui::MenuItem("Save Layout")) {
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        ImGuiFileDialog::Instance()->OpenDialog("SaveLayoutDlg", "Save Layout", ".yaml", config);
+      }
+      if (ImGui::MenuItem("Open Layout")) {
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        ImGuiFileDialog::Instance()->OpenDialog("OpenLayoutDlg", "Open Layout", ".yaml", config);
+      }
+      ImGui::Separator();
       if (ImGui::MenuItem("Close")) {
         appRunning = false;
       }
@@ -687,6 +780,10 @@ void MainLoopStep(void *arg) {
           if (!sig.dataX.empty()) {
             ImPlot::PlotLine(sig.name.c_str(), sig.dataX.data(),
                              sig.dataY.data(), sig.dataX.size(), 0, sig.offset);
+          } else {
+            // Plot empty data to show signal in legend
+            double empty[1] = {0};
+            ImPlot::PlotLine(sig.name.c_str(), empty, empty, 0);
           }
         }
       }
@@ -695,7 +792,33 @@ void MainLoopStep(void *arg) {
     ImGui::End();
   }
 
-  // 2. CLEANUP PHASE (The "Erase-Remove Idiom")
+  // ---------------------------------------------------------
+  // UI: FILE DIALOGS
+  // ---------------------------------------------------------
+
+  // Display Save Layout dialog
+  if (ImGuiFileDialog::Instance()->Display("SaveLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
+    if (ImGuiFileDialog::Instance()->IsOk()) {
+      std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
+      SaveLayout(filePathName, activePlots);
+    }
+    ImGuiFileDialog::Instance()->Close();
+  }
+
+  // Display Open Layout dialog
+  if (ImGuiFileDialog::Instance()->Display("OpenLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
+    if (ImGuiFileDialog::Instance()->IsOk()) {
+      std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
+      if (LoadLayout(filePathName, activePlots, nextPlotId)) {
+        // Layout loaded successfully
+      }
+    }
+    ImGuiFileDialog::Instance()->Close();
+  }
+
+  // ---------------------------------------------------------
+  // CLEANUP PHASE (The "Erase-Remove Idiom")
+  // ---------------------------------------------------------
   activePlots.erase(
       std::remove_if(activePlots.begin(), activePlots.end(),
                      [](const PlotWindow &p) { return !p.isOpen; }),

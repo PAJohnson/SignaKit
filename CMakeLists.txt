@@ -62,6 +62,18 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(implot)
 set(IMPLOT_DIR ${implot_SOURCE_DIR})
 
+# Fetch ImGuiFileDialog
+FetchContent_Declare(
+  ImGuiFileDialog
+  GIT_REPOSITORY https://github.com/aiekick/ImGuiFileDialog.git
+  GIT_TAG master
+)
+FetchContent_GetProperties(ImGuiFileDialog)
+if(NOT imguifiledialog_POPULATED)
+  FetchContent_Populate(ImGuiFileDialog)
+endif()
+set(IMGUIFILEDIALOG_DIR ${imguifiledialog_SOURCE_DIR})
+
 # 2. ImGui Sources
 # Note: We need core files + the specific backends for SDL2 and OpenGL3
 set(IMGUI_SOURCES
@@ -81,19 +93,26 @@ set(IMPLOT_SOURCES
     ${IMPLOT_DIR}/implot_demo.cpp
 )
 
-# 4. Create Executable
-add_executable(telemetry_gui 
-    src/main.cpp 
+# 4. ImGuiFileDialog Sources
+set(IMGUIFILEDIALOG_SOURCES
+    ${IMGUIFILEDIALOG_DIR}/ImGuiFileDialog.cpp
+)
+
+# 5. Create Executable
+add_executable(telemetry_gui
+    src/main.cpp
     src/SignalConfigLoader.cpp
     ${IMGUI_SOURCES}
     ${IMPLOT_SOURCES}
+    ${IMGUIFILEDIALOG_SOURCES}
 )
 
-# 5. Include Directories
-target_include_directories(telemetry_gui PRIVATE 
+# 6. Include Directories
+target_include_directories(telemetry_gui PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${IMPLOT_DIR}
+    ${IMGUIFILEDIALOG_DIR}
     ${SDL2_INCLUDE_DIRS}
     src
 )
