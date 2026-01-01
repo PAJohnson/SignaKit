@@ -150,13 +150,16 @@ else()
     endif()
 endif()
 
-# 8. Test Executable
-add_executable(test_loader 
-    src/test_loader.cpp 
+# 8. Test Executables
+add_executable(test_loader
+    src/test_loader.cpp
     src/SignalConfigLoader.cpp
 )
 target_include_directories(test_loader PRIVATE src)
 target_link_libraries(test_loader PRIVATE yaml-cpp)
+
+add_executable(struct_size_test src/struct_size_test.cpp)
+target_include_directories(struct_size_test PRIVATE src)
 
 add_executable(mock_device src/mock_device.cpp)
 target_include_directories(mock_device PRIVATE src)

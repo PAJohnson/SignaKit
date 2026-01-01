@@ -6,6 +6,7 @@
 #include <SDL_opengl.h>
 #include <algorithm> // For std::find
 #include <atomic>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <stdio.h>
@@ -90,7 +91,10 @@ int nextPlotId = 1; // Auto-increment ID for window titles
 // NETWORK THREAD
 // -------------------------------------------------------------------------
 // Helper to read a value from the buffer based on type
+// Supports all stdint.h types plus legacy C types for backwards compatibility
+// All values are cast to double for storage in the signal buffers
 double ReadValue(const char *buffer, const PacketDefinition::Field &field) {
+  // Floating point types
   if (field.type == "double") {
     double val;
     memcpy(&val, buffer + field.offset, sizeof(double));
@@ -100,6 +104,76 @@ double ReadValue(const char *buffer, const PacketDefinition::Field &field) {
     memcpy(&val, buffer + field.offset, sizeof(float));
     return (double)val;
   }
+  // Signed integer types
+  else if (field.type == "int8_t" || field.type == "int8") {
+    int8_t val;
+    memcpy(&val, buffer + field.offset, sizeof(int8_t));
+    return (double)val;
+  } else if (field.type == "int16_t" || field.type == "int16") {
+    int16_t val;
+    memcpy(&val, buffer + field.offset, sizeof(int16_t));
+    return (double)val;
+  } else if (field.type == "int32_t" || field.type == "int32" || field.type == "int") {
+    int32_t val;
+    memcpy(&val, buffer + field.offset, sizeof(int32_t));
+    return (double)val;
+  } else if (field.type == "int64_t" || field.type == "int64") {
+    int64_t val;
+    memcpy(&val, buffer + field.offset, sizeof(int64_t));
+    return (double)val;
+  }
+  // Unsigned integer types
+  else if (field.type == "uint8_t" || field.type == "uint8") {
+    uint8_t val;
+    memcpy(&val, buffer + field.offset, sizeof(uint8_t));
+    return (double)val;
+  } else if (field.type == "uint16_t" || field.type == "uint16") {
+    uint16_t val;
+    memcpy(&val, buffer + field.offset, sizeof(uint16_t));
+    return (double)val;
+  } else if (field.type == "uint32_t" || field.type == "uint32") {
+    uint32_t val;
+    memcpy(&val, buffer + field.offset, sizeof(uint32_t));
+    return (double)val;
+  } else if (field.type == "uint64_t" || field.type == "uint64") {
+    uint64_t val;
+    memcpy(&val, buffer + field.offset, sizeof(uint64_t));
+    return (double)val;
+  }
+  // Standard C types (for backwards compatibility)
+  else if (field.type == "char") {
+    char val;
+    memcpy(&val, buffer + field.offset, sizeof(char));
+    return (double)val;
+  } else if (field.type == "short") {
+    short val;
+    memcpy(&val, buffer + field.offset, sizeof(short));
+    return (double)val;
+  } else if (field.type == "long") {
+    long val;
+    memcpy(&val, buffer + field.offset, sizeof(long));
+    return (double)val;
+  } else if (field.type == "unsigned char") {
+    unsigned char val;
+    memcpy(&val, buffer + field.offset, sizeof(unsigned char));
+    return (double)val;
+  } else if (field.type == "unsigned short") {
+    unsigned short val;
+    memcpy(&val, buffer + field.offset, sizeof(unsigned short));
+    return (double)val;
+  } else if (field.type == "unsigned int") {
+    unsigned int val;
+    memcpy(&val, buffer + field.offset, sizeof(unsigned int));
+    return (double)val;
+  } else if (field.type == "unsigned long") {
+    unsigned long val;
+    memcpy(&val, buffer + field.offset, sizeof(unsigned long));
+    return (double)val;
+  }
+
+  // Unknown type - return 0 and warn
+  fprintf(stderr, "Warning: Unknown field type '%s' for field '%s'\n",
+          field.type.c_str(), field.name.c_str());
   return 0.0;
 }
 
@@ -476,14 +550,7 @@ int main(int, char **) {
   ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
   ImGui_ImplOpenGL3_Init(glsl_version);
 
-  // Initial default plot
-  {
-    PlotWindow p;
-    p.id = 0;
-    p.title = "Main Plot";
-    p.signalNames.push_back("IMU.accelX");
-    activePlots.push_back(p);
-  }
+  // No initial plots - user can create them via "Add New Plot Window" button
 
   GlobalContext ctx;
   ctx.window = window;

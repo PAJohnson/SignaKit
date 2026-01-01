@@ -181,14 +181,17 @@ Create or update `src/telemetry_defs.h`:
 
 ```cpp
 // Example: Adding a Battery packet
+#include <cstdint>  // For uint8_t, uint16_t, etc.
+
 struct BatteryData {
   char header[4];      // "BAT\0"
   double time;         // Timestamp
   float voltage;       // Battery voltage (V)
   float current;       // Battery current (A)
   float temperature;   // Temperature (°C)
-  uint8_t percentage;  // State of charge (%)
-  uint8_t padding[3];  // Alignment padding
+  uint8_t percentage;  // State of charge (0-100%)
+  uint8_t health;      // Battery health (0-100%)
+  uint16_t cycleCount; // Number of charge cycles
 };
 ```
 
@@ -208,14 +211,16 @@ packets:
 
   - id: "Battery"
     header_string: "BAT"
-    size_check: 24              # sizeof(BatteryData)
+    size_check: 26              # sizeof(BatteryData)
     time_field: "time"
     fields:
-      - {name: "time",        type: "double", offset: 4}   # After header
-      - {name: "voltage",     type: "float",  offset: 12}
-      - {name: "current",     type: "float",  offset: 16}
-      - {name: "temperature", type: "float",  offset: 20}
-      # Note: uint8_t percentage not included as it's not float/double
+      - {name: "time",        type: "double",  offset: 4}   # After header
+      - {name: "voltage",     type: "float",   offset: 12}
+      - {name: "current",     type: "float",   offset: 16}
+      - {name: "temperature", type: "float",   offset: 20}
+      - {name: "percentage",  type: "uint8_t", offset: 24}
+      - {name: "health",      type: "uint8_t", offset: 25}
+      - {name: "cycleCount",  type: "uint16_t", offset: 26}
 ```
 
 **Field Offsets**:
@@ -226,8 +231,33 @@ packets:
   ```
 
 **Supported Types**:
-- `double` - 8 bytes, double precision float
-- `float` - 4 bytes, single precision float
+
+Floating Point:
+- `double` - 8 bytes, double precision floating point
+- `float` - 4 bytes, single precision floating point
+
+Signed Integers (stdint.h):
+- `int8_t` or `int8` - 1 byte, signed integer (-128 to 127)
+- `int16_t` or `int16` - 2 bytes, signed integer (-32,768 to 32,767)
+- `int32_t` or `int32` or `int` - 4 bytes, signed integer (-2^31 to 2^31-1)
+- `int64_t` or `int64` - 8 bytes, signed integer (-2^63 to 2^63-1)
+
+Unsigned Integers (stdint.h):
+- `uint8_t` or `uint8` - 1 byte, unsigned integer (0 to 255)
+- `uint16_t` or `uint16` - 2 bytes, unsigned integer (0 to 65,535)
+- `uint32_t` or `uint32` - 4 bytes, unsigned integer (0 to 2^32-1)
+- `uint64_t` or `uint64` - 8 bytes, unsigned integer (0 to 2^64-1)
+
+Legacy C Types (backwards compatibility):
+- `char` - typically 1 byte, signed or unsigned depending on platform
+- `short` - typically 2 bytes, signed integer
+- `long` - platform-dependent size, signed integer
+- `unsigned char` - typically 1 byte, unsigned integer
+- `unsigned short` - typically 2 bytes, unsigned integer
+- `unsigned int` - typically 4 bytes, unsigned integer
+- `unsigned long` - platform-dependent size, unsigned integer
+
+**Note**: For portability, prefer using the stdint.h types (`int8_t`, `uint32_t`, etc.) as they have guaranteed sizes across platforms.
 
 ### Step 3: Update Data Source
 
@@ -251,7 +281,9 @@ void battery_thread_func(int sockfd, sockaddr_in dest_addr) {
         packet.voltage = 12.0f + 0.5f * sin(t * 0.1f);  // Simulate discharge
         packet.current = 5.0f + 1.0f * cos(t * 0.2f);   // Variable load
         packet.temperature = 25.0f + 3.0f * sin(t * 0.05f);
-        packet.percentage = 100 - (uint8_t)(t / 10.0);   // Slow discharge
+        packet.percentage = (uint8_t)(100 - (t / 10.0));  // Slow discharge (0-100%)
+        packet.health = (uint8_t)(100 - (t / 100.0));     // Very slow degradation
+        packet.cycleCount = (uint16_t)(t / 5.0);          // Increment every 5 seconds
 
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
@@ -288,6 +320,9 @@ batteryThread.join();
    - Battery.voltage
    - Battery.current
    - Battery.temperature
+   - Battery.percentage
+   - Battery.health
+   - Battery.cycleCount
 
 5. **Drag signals to a plot** to visualize them in real-time.
 

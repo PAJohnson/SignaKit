@@ -1,3 +1,13 @@
+# Signal Configuration File
+#
+# Supported field types:
+#   Floating Point: double, float
+#   Signed Integers: int8_t, int16_t, int32_t, int64_t (or int8, int16, int32, int64, int)
+#   Unsigned Integers: uint8_t, uint16_t, uint32_t, uint64_t (or uint8, uint16, uint32, uint64)
+#   Legacy C types: char, short, long, unsigned char, unsigned short, unsigned int, unsigned long
+#
+# For portability, prefer stdint.h types (int8_t, uint32_t, etc.)
+
 packets:
   - id: "IMU"
     header_string: "IMU"
@@ -22,3 +32,85 @@ packets:
       - {name: "longitude", type: "double", offset: 20}
       - {name: "altitude",  type: "float",  offset: 28}
       - {name: "speed",     type: "float",  offset: 32}
+
+  - id: "Battery"
+    header_string: "BAT"
+    size_check: 28
+    time_field: "time"
+    fields:
+      - {name: "time",        type: "double",   offset: 4}
+      - {name: "voltage",     type: "float",    offset: 12}
+      - {name: "current",     type: "float",    offset: 16}
+      - {name: "temperature", type: "float",    offset: 20}
+      - {name: "percentage",  type: "uint8_t",  offset: 24}
+      - {name: "health",      type: "uint8_t",  offset: 25}
+      - {name: "cycleCount",  type: "uint16_t", offset: 26}
+
+  - id: "LIDAR"
+    header_string: "LID"
+    size_check: 26
+    time_field: "time"
+    fields:
+      - {name: "time",      type: "double",  offset: 4}
+      - {name: "range",     type: "float",   offset: 12}
+      - {name: "intensity", type: "float",   offset: 16}
+      - {name: "angleX",    type: "int16_t", offset: 20}
+      - {name: "angleY",    type: "int16_t", offset: 22}
+      - {name: "quality",   type: "uint8_t", offset: 24}
+      - {name: "flags",     type: "uint8_t", offset: 25}
+
+  - id: "RADAR"
+    header_string: "RAD"
+    size_check: 32
+    time_field: "time"
+    fields:
+      - {name: "time",           type: "double",  offset: 4}
+      - {name: "range",          type: "float",   offset: 12}
+      - {name: "velocity",       type: "float",   offset: 16}
+      - {name: "azimuth",        type: "float",   offset: 20}
+      - {name: "elevation",      type: "float",   offset: 24}
+      - {name: "signalStrength", type: "int16_t", offset: 28}
+      - {name: "targetCount",    type: "uint8_t", offset: 30}
+      - {name: "trackID",        type: "uint8_t", offset: 31}
+
+  - id: "State"
+    header_string: "STA"
+    size_check: 32
+    time_field: "time"
+    fields:
+      - {name: "time",         type: "double",   offset: 4}
+      - {name: "systemMode",   type: "uint8_t",  offset: 12}
+      - {name: "armed",        type: "uint8_t",  offset: 13}
+      - {name: "statusFlags",  type: "uint16_t", offset: 14}
+      - {name: "errorCode",    type: "int32_t",  offset: 16}
+      - {name: "uptime",       type: "uint32_t", offset: 20}
+      - {name: "cpuUsage",     type: "float",    offset: 24}
+      - {name: "memoryUsage",  type: "float",    offset: 28}
+
+  - id: "Debug"
+    header_string: "DBG"
+    size_check: 34
+    time_field: "time"
+    fields:
+      - {name: "time",      type: "double",   offset: 4}
+      - {name: "counter",   type: "int64_t",  offset: 12}
+      - {name: "eventID",   type: "uint32_t", offset: 20}
+      - {name: "priority",  type: "int8_t",   offset: 24}
+      - {name: "subsystem", type: "uint8_t",  offset: 25}
+      - {name: "value1",    type: "int16_t",  offset: 26}
+      - {name: "value2",    type: "int16_t",  offset: 28}
+      - {name: "metric",    type: "float",    offset: 30}
+
+  - id: "Motor"
+    header_string: "MTR"
+    size_check: 30
+    time_field: "time"
+    fields:
+      - {name: "time",           type: "double",   offset: 4}
+      - {name: "rpm",            type: "int16_t",  offset: 12}
+      - {name: "torque",         type: "float",    offset: 14}
+      - {name: "power",          type: "float",    offset: 18}
+      - {name: "temperature",    type: "int8_t",   offset: 22}
+      - {name: "throttle",       type: "uint8_t",  offset: 23}
+      - {name: "faults",         type: "uint16_t", offset: 24}
+      - {name: "totalRotations", type: "uint32_t", offset: 26}
