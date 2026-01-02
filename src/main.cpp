@@ -12,6 +12,7 @@
 #include <ctime>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -19,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <iostream>
 
 // Network Includes
 #include "SignalConfigLoader.h"
@@ -38,6 +40,12 @@
 // DATA STRUCTURES
 // -------------------------------------------------------------------------
 
+// Playback mode enum
+enum class PlaybackMode {
+  ONLINE,   // Real-time from network
+  OFFLINE   // File playback
+};
+
 // A single signal (e.g., "IMU.AccelX") holding its own history
 struct Signal {
   std::string name;
@@ -45,21 +53,45 @@ struct Signal {
   std::vector<double> dataX; // Time
   std::vector<double> dataY; // Value
   int maxSize;
+  PlaybackMode mode;
 
-  Signal(std::string n = "", int size = 2000)
-      : name(n), maxSize(size), offset(0) {
-    dataX.reserve(maxSize);
-    dataY.reserve(maxSize);
+  Signal(std::string n = "", int size = 2000, PlaybackMode m = PlaybackMode::ONLINE)
+      : name(n), maxSize(size), offset(0), mode(m) {
+    if (mode == PlaybackMode::ONLINE) {
+      dataX.reserve(maxSize);
+      dataY.reserve(maxSize);
+    }
   }
 
   void AddPoint(double x, double y) {
-    if (dataX.size() < maxSize) {
+    if (mode == PlaybackMode::ONLINE) {
+      // Online mode: circular buffer with fixed size
+      if (dataX.size() < maxSize) {
+        dataX.push_back(x);
+        dataY.push_back(y);
+      } else {
+        dataX[offset] = x;
+        dataY[offset] = y;
+        offset = (offset + 1) % maxSize;
+      }
+    } else {
+      // Offline mode: grow indefinitely
       dataX.push_back(x);
       dataY.push_back(y);
-    } else {
-      dataX[offset] = x;
-      dataY[offset] = y;
-      offset = (offset + 1) % maxSize;
+    }
+  }
+
+  void Clear() {
+    dataX.clear();
+    dataY.clear();
+    offset = 0;
+  }
+
+  void SetMode(PlaybackMode m) {
+    mode = m;
+    if (mode == PlaybackMode::ONLINE && dataX.capacity() < maxSize) {
+      dataX.reserve(maxSize);
+      dataY.reserve(maxSize);
     }
   }
 };
@@ -103,6 +135,9 @@ struct XYPlotWindow {
 std::mutex stateMutex;
 std::atomic<bool> appRunning(true);
 
+// Playback mode state
+PlaybackMode currentPlaybackMode = PlaybackMode::ONLINE;
+
 // Network connection state
 std::atomic<bool> networkConnected(false);
 std::atomic<bool> networkShouldConnect(false);
@@ -113,6 +148,16 @@ int networkPort = UDP_PORT;
 // Data logging state
 std::ofstream logFile;
 std::mutex logFileMutex;
+
+// Offline playback state
+struct OfflinePlaybackState {
+  double minTime = 0.0;
+  double maxTime = 0.0;
+  double currentWindowStart = 0.0;
+  double windowWidth = 10.0;  // Will be set to full duration on file load
+  bool fileLoaded = false;
+  std::string loadedFilePath;
+} offlineState;
 
 // The Registry: Maps a string ID to the actual data buffer
 std::map<std::string, Signal> signalRegistry;
@@ -236,6 +281,119 @@ double ReadValue(const char *buffer, const std::string &type, int offset) {
   // Unknown type - return 0 and warn
   fprintf(stderr, "Warning: Unknown field type '%s'\n", type.c_str());
   return 0.0;
+}
+
+// Helper to load a binary log file and populate signal registry
+bool LoadLogFile(const std::string &filename) {
+  std::ifstream file(filename, std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    fprintf(stderr, "Failed to open log file: %s\n", filename.c_str());
+    return false;
+  }
+
+  // Get file size
+  std::streamsize fileSize = file.tellg();
+  file.seekg(0, std::ios::beg);
+
+  printf("Loading log file: %s (%lld bytes)\n", filename.c_str(), (long long)fileSize);
+
+  // Load packet definitions
+  std::vector<PacketDefinition> packets;
+  if (!SignalConfigLoader::Load("signals.yaml", packets)) {
+    fprintf(stderr, "Failed to load signals.yaml for offline playback\n");
+    return false;
+  }
+
+  // Clear existing signal registry and reinitialize for offline mode
+  // NOTE: Caller must already hold stateMutex
+  signalRegistry.clear();
+  for (const auto &pkt : packets) {
+    for (const auto &sig : pkt.signals) {
+      signalRegistry[sig.key] = Signal(sig.key, 2000, PlaybackMode::OFFLINE);
+    }
+  }
+
+  // Read and parse the entire file
+  char buffer[1024];
+  int packetsProcessed = 0;
+  double minTime = std::numeric_limits<double>::max();
+  double maxTime = std::numeric_limits<double>::lowest();
+
+  std::streampos currentPos = 0;
+  file.seekg(0, std::ios::beg);
+
+  while (currentPos < fileSize) {
+    // Read a chunk at current position
+    file.seekg(currentPos);
+    std::streamsize remainingBytes = fileSize - currentPos;
+    std::streamsize bytesToRead = std::min(remainingBytes, (std::streamsize)sizeof(buffer));
+
+    file.read(buffer, bytesToRead);
+    std::streamsize bytesRead = file.gcount();
+
+    if (bytesRead == 0) {
+      printf("Warning: Failed to read at position %lld\n", (long long)currentPos);
+      break;
+    }
+
+    // Try to match packet by header string
+    bool matched = false;
+    for (const PacketDefinition &pkt : packets) {
+      if (bytesRead >= (std::streamsize)pkt.sizeCheck &&
+          strncmp(buffer, pkt.headerString.c_str(), pkt.headerString.length()) == 0) {
+
+        // Matched packet! Process all signals
+        // NOTE: Caller already holds stateMutex
+        for (const auto &sig : pkt.signals) {
+          double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
+          double v = ReadValue(buffer, sig.type, sig.offset);
+
+          // Update signal registry (no lock needed - caller holds it)
+          signalRegistry[sig.key].AddPoint(t, v);
+
+          // Track time range
+          if (t < minTime) minTime = t;
+          if (t > maxTime) maxTime = t;
+        }
+
+        packetsProcessed++;
+        matched = true;
+
+        // Advance to next packet
+        currentPos += pkt.sizeCheck;
+        break;
+      }
+    }
+
+    if (!matched) {
+      // Unknown data, skip one byte and try again
+      currentPos += 1;
+    }
+
+    // Progress indicator every 10000 packets
+    if (packetsProcessed % 10000 == 0 && packetsProcessed > 0) {
+      printf("Progress: %d packets processed (%.1f%%)...\n",
+             packetsProcessed,
+             100.0 * currentPos / fileSize);
+    }
+  }
+
+  file.close();
+  printf("Parsing complete.\n");
+
+  // Update offline playback state
+  offlineState.minTime = minTime;
+  offlineState.maxTime = maxTime;
+  offlineState.currentWindowStart = minTime;
+  offlineState.windowWidth = maxTime - minTime;  // Show entire file initially
+  offlineState.fileLoaded = true;
+  offlineState.loadedFilePath = filename;
+
+  printf("Log file loaded: %d packets processed\n", packetsProcessed);
+  printf("Time range: %.3f - %.3f seconds (duration: %.3f s)\n",
+         minTime, maxTime, maxTime - minTime);
+
+  return true;
 }
 
 // -------------------------------------------------------------------------
@@ -654,35 +812,89 @@ void MainLoopStep(void *arg) {
     // Add spacing
     ImGui::Separator();
 
-    // IP input
-    ImGui::Text("IP:");
+    // Online/Offline Mode Toggle
+    ImGui::Text("Mode:");
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(150);
-    ImGui::InputText("##IP", ipBuffer, sizeof(ipBuffer));
+    bool isOnline = (currentPlaybackMode == PlaybackMode::ONLINE);
+    if (ImGui::RadioButton("Online", isOnline)) {
+      if (!isOnline) {
+        // Switching to online mode
+        currentPlaybackMode = PlaybackMode::ONLINE;
+        offlineState.fileLoaded = false;
 
-    // Port input
-    ImGui::SameLine();
-    ImGui::Text("Port:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(80);
-    ImGui::InputText("##Port", portBuffer, sizeof(portBuffer), ImGuiInputTextFlags_CharsDecimal);
-
-    // Connect/Disconnect button
-    ImGui::SameLine();
-    bool isConnected = networkConnected.load();
-    const char* buttonText = isConnected ? "Disconnect" : "Connect";
-    if (ImGui::Button(buttonText)) {
-      if (isConnected) {
-        // Disconnect
-        networkShouldConnect = false;
-      } else {
-        // Update connection parameters and connect
-        {
-          std::lock_guard<std::mutex> lock(networkConfigMutex);
-          networkIP = std::string(ipBuffer);
-          networkPort = atoi(portBuffer);
+        // Disconnect network if connected
+        if (networkConnected.load()) {
+          networkShouldConnect = false;
         }
-        networkShouldConnect = true;
+
+        // Clear and reinitialize signal registry for online mode
+        std::lock_guard<std::mutex> lock(stateMutex);
+        signalRegistry.clear();
+        // Signals will be reinitialized by network thread
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Offline", !isOnline)) {
+      if (isOnline) {
+        // Switching to offline mode
+        currentPlaybackMode = PlaybackMode::OFFLINE;
+
+        // Disconnect network if connected
+        if (networkConnected.load()) {
+          networkShouldConnect = false;
+        }
+      }
+    }
+
+    ImGui::Separator();
+
+    // Conditional UI based on mode
+    if (currentPlaybackMode == PlaybackMode::ONLINE) {
+      // IP input
+      ImGui::Text("IP:");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(150);
+      ImGui::InputText("##IP", ipBuffer, sizeof(ipBuffer));
+
+      // Port input
+      ImGui::SameLine();
+      ImGui::Text("Port:");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(80);
+      ImGui::InputText("##Port", portBuffer, sizeof(portBuffer), ImGuiInputTextFlags_CharsDecimal);
+
+      // Connect/Disconnect button
+      ImGui::SameLine();
+      bool isConnected = networkConnected.load();
+      const char* buttonText = isConnected ? "Disconnect" : "Connect";
+      if (ImGui::Button(buttonText)) {
+        if (isConnected) {
+          // Disconnect
+          networkShouldConnect = false;
+        } else {
+          // Update connection parameters and connect
+          {
+            std::lock_guard<std::mutex> lock(networkConfigMutex);
+            networkIP = std::string(ipBuffer);
+            networkPort = atoi(portBuffer);
+          }
+          networkShouldConnect = true;
+        }
+      }
+    } else {
+      // Offline mode: Open File button
+      if (ImGui::Button("Open Log File")) {
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        ImGuiFileDialog::Instance()->OpenDialog("OpenLogFileDlg", "Open Log File", ".bin", config);
+      }
+
+      // Display loaded file info
+      if (offlineState.fileLoaded) {
+        ImGui::SameLine();
+        ImGui::Text("Loaded: %s (%.2fs)",
+                    offlineState.loadedFilePath.c_str(),
+                    offlineState.maxTime - offlineState.minTime);
       }
     }
 
@@ -780,7 +992,13 @@ void MainLoopStep(void *arg) {
       ImPlot::SetupAxes("Time (s)", "Value", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
 
       // Axis Logic
-      if (!plot.paused && !plot.signalNames.empty()) {
+      if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
+        // Offline mode: use time window from slider
+        double windowEnd = offlineState.currentWindowStart + offlineState.windowWidth;
+        ImPlot::SetupAxisLimits(ImAxis_X1, offlineState.currentWindowStart, windowEnd,
+                                ImGuiCond_Always);
+      } else if (!plot.paused && !plot.signalNames.empty()) {
+        // Online mode: auto-scroll to show last 5 seconds
         double maxTime = 0;
         for (const auto &sigName : plot.signalNames) {
           if (signalRegistry.count(sigName)) {
@@ -865,9 +1083,25 @@ void MainLoopStep(void *arg) {
       if (signalRegistry.count(readout.signalName)) {
         Signal &sig = signalRegistry[readout.signalName];
         if (!sig.dataY.empty()) {
-          // Get the most recent value
-          int idx = (sig.offset == 0) ? sig.dataY.size() - 1 : sig.offset - 1;
-          double currentValue = sig.dataY[idx];
+          // Get the value to display based on mode
+          double currentValue;
+          if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
+            // Offline mode: find the value at the current time window end
+            double targetTime = offlineState.currentWindowStart + offlineState.windowWidth;
+            // Find the last value before or at targetTime
+            int idx = sig.dataY.size() - 1;
+            for (int i = sig.dataX.size() - 1; i >= 0; i--) {
+              if (sig.dataX[i] <= targetTime) {
+                idx = i;
+                break;
+              }
+            }
+            currentValue = sig.dataY[idx];
+          } else {
+            // Online mode: get the most recent value using circular buffer logic
+            int idx = (sig.offset == 0) ? sig.dataY.size() - 1 : sig.offset - 1;
+            currentValue = sig.dataY[idx];
+          }
 
           // Display with larger text, centered
           ImVec2 windowSize = ImGui::GetWindowSize();
@@ -939,14 +1173,34 @@ void MainLoopStep(void *arg) {
       xyPlot.historyOffset = 0;
     }
 
-    // Update history if both signals are assigned and not paused
+    // Update history based on mode
     if (!xyPlot.paused && !xyPlot.xSignalName.empty() && !xyPlot.ySignalName.empty()) {
       if (signalRegistry.count(xyPlot.xSignalName) && signalRegistry.count(xyPlot.ySignalName)) {
         Signal &xSig = signalRegistry[xyPlot.xSignalName];
         Signal &ySig = signalRegistry[xyPlot.ySignalName];
 
-        if (!xSig.dataY.empty() && !ySig.dataY.empty()) {
-          // Get the most recent values
+        if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
+          // Offline mode: rebuild history from signals within time window
+          xyPlot.historyX.clear();
+          xyPlot.historyY.clear();
+          xyPlot.historyOffset = 0;
+
+          double windowStart = offlineState.currentWindowStart;
+          double windowEnd = offlineState.currentWindowStart + offlineState.windowWidth;
+
+          // Find overlapping time points (use xSig's time as reference)
+          for (size_t i = 0; i < xSig.dataX.size(); i++) {
+            if (xSig.dataX[i] >= windowStart && xSig.dataX[i] <= windowEnd) {
+              // Find corresponding Y value at the same or closest time
+              // For simplicity, assume signals are sampled together (same index)
+              if (i < ySig.dataY.size()) {
+                xyPlot.historyX.push_back(xSig.dataY[i]);
+                xyPlot.historyY.push_back(ySig.dataY[i]);
+              }
+            }
+          }
+        } else if (!xSig.dataY.empty() && !ySig.dataY.empty()) {
+          // Online mode: get the most recent values and add to circular buffer
           int xIdx = (xSig.offset == 0) ? xSig.dataY.size() - 1 : xSig.offset - 1;
           int yIdx = (ySig.offset == 0) ? ySig.dataY.size() - 1 : ySig.offset - 1;
           double xVal = xSig.dataY[xIdx];
@@ -1038,6 +1292,65 @@ void MainLoopStep(void *arg) {
   }
 
   // ---------------------------------------------------------
+  // UI: TIME SLIDER (Offline Mode Only)
+  // ---------------------------------------------------------
+  if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
+    // Position at bottom of screen, above file dialogs
+    float sliderHeight = 80.0f;
+    ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - sliderHeight), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, sliderHeight), ImGuiCond_Always);
+
+    ImGui::Begin("Time Control", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+
+    // Time range info
+    ImGui::Text("Time Range: %.3f - %.3f s (Total: %.3f s)",
+                offlineState.minTime, offlineState.maxTime,
+                offlineState.maxTime - offlineState.minTime);
+
+    // Window width control with scroll wheel
+    ImGui::SameLine();
+    ImGui::Text("  |  Window Width: %.3f s", offlineState.windowWidth);
+
+    if (ImGui::IsWindowHovered()) {
+      float mouseWheel = io.MouseWheel;
+      if (mouseWheel != 0.0f) {
+        // Zoom in/out with scroll wheel
+        float zoomFactor = 1.0f + (mouseWheel * 0.1f);
+        offlineState.windowWidth *= zoomFactor;
+
+        // Clamp window width
+        float minWidth = 0.1f;  // Minimum 0.1 second window
+        float maxWidth = offlineState.maxTime - offlineState.minTime;
+        if (offlineState.windowWidth < minWidth) offlineState.windowWidth = minWidth;
+        if (offlineState.windowWidth > maxWidth) offlineState.windowWidth = maxWidth;
+
+        // Adjust currentWindowStart to keep it in bounds
+        if (offlineState.currentWindowStart + offlineState.windowWidth > offlineState.maxTime) {
+          offlineState.currentWindowStart = offlineState.maxTime - offlineState.windowWidth;
+        }
+        if (offlineState.currentWindowStart < offlineState.minTime) {
+          offlineState.currentWindowStart = offlineState.minTime;
+        }
+      }
+    }
+
+    // Time slider
+    float sliderPos = (float)offlineState.currentWindowStart;
+    float sliderMax = (float)(offlineState.maxTime - offlineState.windowWidth);
+    if (sliderMax < offlineState.minTime) sliderMax = (float)offlineState.minTime;
+
+    ImGui::SetNextItemWidth(-1);  // Full width
+    if (ImGui::SliderFloat("##TimeSlider", &sliderPos, (float)offlineState.minTime, sliderMax,
+                           "Start: %.3f s")) {
+      offlineState.currentWindowStart = sliderPos;
+    }
+
+    ImGui::End();
+  }
+
+  // ---------------------------------------------------------
   // UI: FILE DIALOGS
   // ---------------------------------------------------------
 
@@ -1056,6 +1369,18 @@ void MainLoopStep(void *arg) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
       if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId)) {
         // Layout loaded successfully
+      }
+    }
+    ImGuiFileDialog::Instance()->Close();
+  }
+
+  // Display Open Log File dialog
+  if (ImGuiFileDialog::Instance()->Display("OpenLogFileDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
+    if (ImGuiFileDialog::Instance()->IsOk()) {
+      std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
+      if (LoadLogFile(filePathName)) {
+        // Log file loaded successfully
+        printf("Successfully loaded log file into offline mode\n");
       }
     }
     ImGuiFileDialog::Instance()->Close();
