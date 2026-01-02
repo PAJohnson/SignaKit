@@ -26,6 +26,10 @@
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 
+// DPI Awareness
+#include <windows.h>
+#include <ShellScalingApi.h>
+
 // telemetry_defs.h removed as we now use dynamic loading.
 
 #define UDP_PORT 5000
@@ -69,6 +73,30 @@ struct PlotWindow {
   bool isOpen = true;
 };
 
+// Represents one Readout Box
+struct ReadoutBox {
+  int id;
+  std::string title;
+  std::string signalName; // Single signal to display (empty if none assigned)
+  bool isOpen = true;
+};
+
+// Represents one X/Y Plot
+struct XYPlotWindow {
+  int id;
+  std::string title;
+  std::string xSignalName; // Signal for X axis
+  std::string ySignalName; // Signal for Y axis
+  bool paused = false;
+  bool isOpen = true;
+
+  // History of X/Y points with fade effect
+  std::vector<double> historyX;
+  std::vector<double> historyY;
+  int maxHistorySize = 500; // Number of points to keep
+  int historyOffset = 0;
+};
+
 // -------------------------------------------------------------------------
 // GLOBAL STATE
 // -------------------------------------------------------------------------
@@ -92,6 +120,14 @@ std::map<std::string, Signal> signalRegistry;
 // The Layout: List of active plot windows
 std::vector<PlotWindow> activePlots;
 int nextPlotId = 1; // Auto-increment ID for window titles
+
+// Readout boxes
+std::vector<ReadoutBox> activeReadoutBoxes;
+int nextReadoutBoxId = 1; // Auto-increment ID for readout box titles
+
+// X/Y plots
+std::vector<XYPlotWindow> activeXYPlots;
+int nextXYPlotId = 1; // Auto-increment ID for X/Y plot titles
 
 // -------------------------------------------------------------------------
 // NETWORK THREAD
@@ -205,12 +241,13 @@ double ReadValue(const char *buffer, const std::string &type, int offset) {
 // -------------------------------------------------------------------------
 // LAYOUT SAVE/LOAD
 // -------------------------------------------------------------------------
-bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots) {
+bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots, const std::vector<ReadoutBox> &readouts, const std::vector<XYPlotWindow> &xyPlots) {
   try {
     YAML::Emitter out;
     out << YAML::BeginMap;
-    out << YAML::Key << "plots" << YAML::Value << YAML::BeginSeq;
 
+    // Save plots
+    out << YAML::Key << "plots" << YAML::Value << YAML::BeginSeq;
     for (const auto &plot : plots) {
       out << YAML::BeginMap;
       out << YAML::Key << "id" << YAML::Value << plot.id;
@@ -223,8 +260,32 @@ bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plot
       out << YAML::EndSeq;
       out << YAML::EndMap;
     }
-
     out << YAML::EndSeq;
+
+    // Save readout boxes
+    out << YAML::Key << "readouts" << YAML::Value << YAML::BeginSeq;
+    for (const auto &readout : readouts) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << readout.id;
+      out << YAML::Key << "title" << YAML::Value << readout.title;
+      out << YAML::Key << "signal" << YAML::Value << readout.signalName;
+      out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+
+    // Save X/Y plots
+    out << YAML::Key << "xyplots" << YAML::Value << YAML::BeginSeq;
+    for (const auto &xyPlot : xyPlots) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << xyPlot.id;
+      out << YAML::Key << "title" << YAML::Value << xyPlot.title;
+      out << YAML::Key << "paused" << YAML::Value << xyPlot.paused;
+      out << YAML::Key << "xSignal" << YAML::Value << xyPlot.xSignalName;
+      out << YAML::Key << "ySignal" << YAML::Value << xyPlot.ySignalName;
+      out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+
     out << YAML::EndMap;
 
     std::ofstream fout(filename);
@@ -243,7 +304,9 @@ bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plot
   }
 }
 
-bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int &nextId) {
+bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int &nextPlotId,
+                std::vector<ReadoutBox> &readouts, int &nextReadoutId,
+                std::vector<XYPlotWindow> &xyPlots, int &nextXYPlotId) {
   try {
     YAML::Node config = YAML::LoadFile(filename);
     if (!config["plots"]) {
@@ -252,8 +315,13 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
     }
 
     std::vector<PlotWindow> loadedPlots;
-    int maxId = 0;
+    std::vector<ReadoutBox> loadedReadouts;
+    std::vector<XYPlotWindow> loadedXYPlots;
+    int maxPlotId = 0;
+    int maxReadoutId = 0;
+    int maxXYPlotId = 0;
 
+    // Load plots
     for (const auto &plotNode : config["plots"]) {
       PlotWindow plot;
       plot.id = plotNode["id"].as<int>();
@@ -268,13 +336,51 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
       }
 
       loadedPlots.push_back(plot);
-      if (plot.id > maxId) {
-        maxId = plot.id;
+      if (plot.id > maxPlotId) {
+        maxPlotId = plot.id;
+      }
+    }
+
+    // Load readout boxes (if present)
+    if (config["readouts"]) {
+      for (const auto &readoutNode : config["readouts"]) {
+        ReadoutBox readout;
+        readout.id = readoutNode["id"].as<int>();
+        readout.title = readoutNode["title"].as<std::string>();
+        readout.signalName = readoutNode["signal"] ? readoutNode["signal"].as<std::string>() : "";
+        readout.isOpen = true;
+
+        loadedReadouts.push_back(readout);
+        if (readout.id > maxReadoutId) {
+          maxReadoutId = readout.id;
+        }
+      }
+    }
+
+    // Load X/Y plots (if present)
+    if (config["xyplots"]) {
+      for (const auto &xyPlotNode : config["xyplots"]) {
+        XYPlotWindow xyPlot;
+        xyPlot.id = xyPlotNode["id"].as<int>();
+        xyPlot.title = xyPlotNode["title"].as<std::string>();
+        xyPlot.paused = xyPlotNode["paused"] ? xyPlotNode["paused"].as<bool>() : false;
+        xyPlot.xSignalName = xyPlotNode["xSignal"] ? xyPlotNode["xSignal"].as<std::string>() : "";
+        xyPlot.ySignalName = xyPlotNode["ySignal"] ? xyPlotNode["ySignal"].as<std::string>() : "";
+        xyPlot.isOpen = true;
+
+        loadedXYPlots.push_back(xyPlot);
+        if (xyPlot.id > maxXYPlotId) {
+          maxXYPlotId = xyPlot.id;
+        }
       }
     }
 
     plots = loadedPlots;
-    nextId = maxId + 1;
+    readouts = loadedReadouts;
+    xyPlots = loadedXYPlots;
+    nextPlotId = maxPlotId + 1;
+    nextReadoutId = maxReadoutId + 1;
+    nextXYPlotId = maxXYPlotId + 1;
     printf("Layout loaded from: %s\n", filename.c_str());
     return true;
   } catch (const std::exception &e) {
@@ -594,12 +700,34 @@ void MainLoopStep(void *arg) {
   ImGui::Text("Available Signals");
   ImGui::Separator();
 
-  // Button to create new plot
-  if (ImGui::Button("Add New Plot Window", ImVec2(-1, 0))) {
-    PlotWindow newPlot;
-    newPlot.id = nextPlotId++;
-    newPlot.title = "Plot " + std::to_string(newPlot.id);
-    activePlots.push_back(newPlot);
+  // Menu to create new plot or readout box
+  if (ImGui::Button("Add New...", ImVec2(-1, 0))) {
+    ImGui::OpenPopup("AddNewPopup");
+  }
+
+  if (ImGui::BeginPopup("AddNewPopup")) {
+    if (ImGui::MenuItem("Time-based Plot")) {
+      PlotWindow newPlot;
+      newPlot.id = nextPlotId++;
+      newPlot.title = "Plot " + std::to_string(newPlot.id);
+      activePlots.push_back(newPlot);
+    }
+    if (ImGui::MenuItem("X/Y Plot")) {
+      XYPlotWindow newXYPlot;
+      newXYPlot.id = nextXYPlotId++;
+      newXYPlot.title = "X/Y Plot " + std::to_string(newXYPlot.id);
+      newXYPlot.xSignalName = "";
+      newXYPlot.ySignalName = "";
+      activeXYPlots.push_back(newXYPlot);
+    }
+    if (ImGui::MenuItem("Readout Box")) {
+      ReadoutBox newReadout;
+      newReadout.id = nextReadoutBoxId++;
+      newReadout.title = "Readout " + std::to_string(newReadout.id);
+      newReadout.signalName = ""; // Empty initially
+      activeReadoutBoxes.push_back(newReadout);
+    }
+    ImGui::EndPopup();
   }
   ImGui::Separator();
 
@@ -649,7 +777,7 @@ void MainLoopStep(void *arg) {
     }
 
     if (ImPlot::BeginPlot("##LinePlot", ImVec2(-1, -1))) {
-      ImPlot::SetupAxes("Time (s)", "Value");
+      ImPlot::SetupAxes("Time (s)", "Value", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
 
       // Axis Logic
       if (!plot.paused && !plot.signalNames.empty()) {
@@ -703,6 +831,213 @@ void MainLoopStep(void *arg) {
   }
 
   // ---------------------------------------------------------
+  // UI: READOUT BOXES
+  // ---------------------------------------------------------
+
+  // Loop through all active readout boxes
+  for (auto &readout : activeReadoutBoxes) {
+    if (!readout.isOpen)
+      continue;
+
+    // Set initial position below menu bar for new readout boxes
+    ImGui::SetNextWindowPos(ImVec2(350, menuBarHeight + 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(300, 150), ImGuiCond_FirstUseEver);
+
+    // Use a stable ID (based on readout.id) while displaying dynamic title
+    // Format: "DisplayTitle##UniqueID"
+    std::string windowID = readout.title + "##Readout" + std::to_string(readout.id);
+    ImGui::Begin(windowID.c_str(), &readout.isOpen);
+
+    // Create a child region to fill the entire window for drag-and-drop
+    ImGui::BeginChild("ReadoutContent", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar);
+
+    // Display content based on whether a signal is assigned
+    if (readout.signalName.empty()) {
+      // Center the text vertically and horizontally
+      ImVec2 windowSize = ImGui::GetWindowSize();
+      const char* text = "Drag and drop a signal here";
+      ImVec2 textSize = ImGui::CalcTextSize(text);
+      ImGui::SetCursorPosX((windowSize.x - textSize.x) * 0.5f);
+      ImGui::SetCursorPosY((windowSize.y - textSize.y) * 0.5f);
+      ImGui::TextWrapped("%s", text);
+    } else {
+      // Display the current value
+      if (signalRegistry.count(readout.signalName)) {
+        Signal &sig = signalRegistry[readout.signalName];
+        if (!sig.dataY.empty()) {
+          // Get the most recent value
+          int idx = (sig.offset == 0) ? sig.dataY.size() - 1 : sig.offset - 1;
+          double currentValue = sig.dataY[idx];
+
+          // Display with larger text, centered
+          ImVec2 windowSize = ImGui::GetWindowSize();
+          char valueStr[64];
+          snprintf(valueStr, sizeof(valueStr), "%.6f", currentValue);
+
+          ImGui::PushFont(io.Fonts->Fonts[0]);
+          ImGui::SetWindowFontScale(2.0f);
+          ImVec2 textSize = ImGui::CalcTextSize(valueStr);
+          ImGui::SetCursorPosX((windowSize.x - textSize.x) * 0.5f);
+          ImGui::SetCursorPosY((windowSize.y - textSize.y) * 0.5f - 20);
+          ImGui::Text("%s", valueStr);
+          ImGui::SetWindowFontScale(1.0f);
+          ImGui::PopFont();
+        } else {
+          ImGui::TextDisabled("No data");
+        }
+      } else {
+        ImGui::TextDisabled("Signal not found");
+      }
+
+      // Button to clear the signal at the bottom
+      ImGui::SetCursorPosY(ImGui::GetWindowSize().y - 30);
+      if (ImGui::Button("Clear Signal", ImVec2(-1, 0))) {
+        readout.signalName = "";
+        readout.title = "Readout " + std::to_string(readout.id);
+      }
+    }
+
+    // Accept drag-and-drop anywhere in the child region (entire window)
+    if (ImGui::BeginDragDropTarget()) {
+      if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+        std::string droppedName = (const char *)payload->Data;
+        readout.signalName = droppedName;
+        readout.title = droppedName;
+      }
+      ImGui::EndDragDropTarget();
+    }
+
+    ImGui::EndChild();
+    ImGui::End();
+  }
+
+  // ---------------------------------------------------------
+  // UI: X/Y PLOTS
+  // ---------------------------------------------------------
+
+  // Loop through all active X/Y plots
+  for (auto &xyPlot : activeXYPlots) {
+    if (!xyPlot.isOpen)
+      continue;
+
+    // Set initial position below menu bar for new X/Y plots
+    ImGui::SetNextWindowPos(ImVec2(350, menuBarHeight + 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+
+    ImGui::Begin(xyPlot.title.c_str(), &xyPlot.isOpen);
+
+    // Plot Header Controls
+    if (ImGui::Button(xyPlot.paused ? "Resume" : "Pause")) {
+      xyPlot.paused = !xyPlot.paused;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear Signals")) {
+      xyPlot.xSignalName = "";
+      xyPlot.ySignalName = "";
+      xyPlot.historyX.clear();
+      xyPlot.historyY.clear();
+      xyPlot.historyOffset = 0;
+    }
+
+    // Update history if both signals are assigned and not paused
+    if (!xyPlot.paused && !xyPlot.xSignalName.empty() && !xyPlot.ySignalName.empty()) {
+      if (signalRegistry.count(xyPlot.xSignalName) && signalRegistry.count(xyPlot.ySignalName)) {
+        Signal &xSig = signalRegistry[xyPlot.xSignalName];
+        Signal &ySig = signalRegistry[xyPlot.ySignalName];
+
+        if (!xSig.dataY.empty() && !ySig.dataY.empty()) {
+          // Get the most recent values
+          int xIdx = (xSig.offset == 0) ? xSig.dataY.size() - 1 : xSig.offset - 1;
+          int yIdx = (ySig.offset == 0) ? ySig.dataY.size() - 1 : ySig.offset - 1;
+          double xVal = xSig.dataY[xIdx];
+          double yVal = ySig.dataY[yIdx];
+
+          // Add to history with circular buffer
+          if (xyPlot.historyX.size() < xyPlot.maxHistorySize) {
+            xyPlot.historyX.push_back(xVal);
+            xyPlot.historyY.push_back(yVal);
+          } else {
+            xyPlot.historyX[xyPlot.historyOffset] = xVal;
+            xyPlot.historyY[xyPlot.historyOffset] = yVal;
+            xyPlot.historyOffset = (xyPlot.historyOffset + 1) % xyPlot.maxHistorySize;
+          }
+        }
+      }
+    }
+
+    if (ImPlot::BeginPlot("##XYPlot", ImVec2(-1, -1))) {
+      // Set axis labels
+      std::string xLabel = xyPlot.xSignalName.empty() ? "X Axis" : xyPlot.xSignalName;
+      std::string yLabel = xyPlot.ySignalName.empty() ? "Y Axis" : xyPlot.ySignalName;
+      ImPlot::SetupAxes(xLabel.c_str(), yLabel.c_str(), ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+
+      // Show instructions if no signals assigned
+      if (xyPlot.xSignalName.empty() || xyPlot.ySignalName.empty()) {
+        // Draw drop zones for X and Y signals
+        ImVec2 plotPos = ImPlot::GetPlotPos();
+        ImVec2 plotSize = ImPlot::GetPlotSize();
+
+        // Text instructions
+        ImPlot::PlotText(xyPlot.xSignalName.empty() ? "Drop signal for X axis" : "X: OK",
+                        0, 0);
+        if (xyPlot.ySignalName.empty()) {
+          ImPlot::PlotText("Drop signal for Y axis", 0, 0.5);
+        }
+      }
+
+      // Drag & Drop Target for X/Y signals
+      if (ImPlot::BeginDragDropTargetPlot()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+          std::string droppedName = (const char *)payload->Data;
+
+          // First drop goes to X, second to Y
+          if (xyPlot.xSignalName.empty()) {
+            xyPlot.xSignalName = droppedName;
+          } else if (xyPlot.ySignalName.empty()) {
+            xyPlot.ySignalName = droppedName;
+          } else {
+            // Both assigned, replace X and shift Y to X
+            xyPlot.xSignalName = xyPlot.ySignalName;
+            xyPlot.ySignalName = droppedName;
+            xyPlot.historyX.clear();
+            xyPlot.historyY.clear();
+            xyPlot.historyOffset = 0;
+          }
+        }
+        ImPlot::EndDragDropTarget();
+      }
+
+      // Render X/Y plot with fading effect
+      if (!xyPlot.historyX.empty() && xyPlot.historyX.size() == xyPlot.historyY.size()) {
+        // Draw segments with fading alpha
+        int numPoints = xyPlot.historyX.size();
+
+        for (int i = 1; i < numPoints; i++) {
+          int idx1 = (xyPlot.historyOffset + i - 1) % numPoints;
+          int idx2 = (xyPlot.historyOffset + i) % numPoints;
+
+          // Calculate fade: newer points (closer to offset) are more opaque
+          float progress = (float)i / (float)numPoints;
+          float alpha = 0.2f + 0.8f * progress; // Range from 0.2 to 1.0
+
+          ImVec4 color = ImPlot::GetColormapColor(0);
+          color.w = alpha;
+
+          ImPlot::SetNextLineStyle(color, 2.0f);
+
+          double x[2] = {xyPlot.historyX[idx1], xyPlot.historyX[idx2]};
+          double y[2] = {xyPlot.historyY[idx1], xyPlot.historyY[idx2]};
+
+          ImPlot::PlotLine("##segment", x, y, 2);
+        }
+      }
+
+      ImPlot::EndPlot();
+    }
+    ImGui::End();
+  }
+
+  // ---------------------------------------------------------
   // UI: FILE DIALOGS
   // ---------------------------------------------------------
 
@@ -710,7 +1045,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("SaveLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      SaveLayout(filePathName, activePlots);
+      SaveLayout(filePathName, activePlots, activeReadoutBoxes, activeXYPlots);
     }
     ImGuiFileDialog::Instance()->Close();
   }
@@ -719,7 +1054,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("OpenLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLayout(filePathName, activePlots, nextPlotId)) {
+      if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId)) {
         // Layout loaded successfully
       }
     }
@@ -734,6 +1069,16 @@ void MainLoopStep(void *arg) {
                      [](const PlotWindow &p) { return !p.isOpen; }),
       activePlots.end());
 
+  activeReadoutBoxes.erase(
+      std::remove_if(activeReadoutBoxes.begin(), activeReadoutBoxes.end(),
+                     [](const ReadoutBox &r) { return !r.isOpen; }),
+      activeReadoutBoxes.end());
+
+  activeXYPlots.erase(
+      std::remove_if(activeXYPlots.begin(), activeXYPlots.end(),
+                     [](const XYPlotWindow &xy) { return !xy.isOpen; }),
+      activeXYPlots.end());
+
   // Render
   ImGui::Render();
   glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
@@ -747,6 +1092,9 @@ void MainLoopStep(void *arg) {
 // MAIN
 // -------------------------------------------------------------------------
 int main(int, char **) {
+  // Enable DPI awareness for high-DPI displays (4K, etc.)
+  SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+
   // Setup SDL
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
     printf("Error: SDL_Init failed: %s\n", SDL_GetError());

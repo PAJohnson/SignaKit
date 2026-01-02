@@ -137,6 +137,7 @@ target_link_libraries(telemetry_gui PRIVATE
     imm32
     winmm
     gdi32
+    shcore
     yaml-cpp
 )
 
