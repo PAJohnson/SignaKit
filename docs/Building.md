@@ -177,19 +177,6 @@ Note: This requires MinGW-w64 cross-compiler installed on your Linux system:
 sudo apt install mingw-w64
 ```
 
-## Emscripten (WebAssembly) Build
-
-To build for web browsers using Emscripten:
-
-```bash
-mkdir build-web
-cd build-web
-emcmake cmake ..
-emmake make
-```
-
-This produces `telemetry_gui.html` which can be served via a web server.
-
 ## Troubleshooting
 
 ### Windows: Missing DLL Errors

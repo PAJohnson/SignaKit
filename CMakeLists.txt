@@ -17,10 +17,7 @@ else()
 endif()
 
 # 1. Find System Packages
-# 1. Find System Packages
-if(EMSCRIPTEN)
-    # Built-in support
-elseif(MINGW OR WIN32)
+if(MINGW OR WIN32)
     include(FetchContent)
     message(STATUS "Fetching SDL2 for Windows build...")
 
@@ -39,9 +36,7 @@ else()
     find_package(SDL2 REQUIRED)
 endif()
 
-if(NOT EMSCRIPTEN)
-   find_package(OpenGL REQUIRED)
-endif()
+find_package(OpenGL REQUIRED)
 
 include(FetchContent)
 
@@ -130,56 +125,40 @@ target_include_directories(telemetry_gui PRIVATE
     src
 )
 
-# 6. Link Libraries
-# 6. Copy resources to build directory for non-Emscripten builds
-if(NOT EMSCRIPTEN)
-    add_custom_command(TARGET telemetry_gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf
-            ${CMAKE_CURRENT_BINARY_DIR}/Roboto-Medium.ttf
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_SOURCE_DIR}/signals.yaml
-            ${CMAKE_CURRENT_BINARY_DIR}/signals.yaml
-    )
-endif()
+# 6. Copy resources to build directory
+add_custom_command(TARGET telemetry_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf
+        ${CMAKE_CURRENT_BINARY_DIR}/Roboto-Medium.ttf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/signals.yaml
+        ${CMAKE_CURRENT_BINARY_DIR}/signals.yaml
+)
 
 # 7. Link Libraries
-if(EMSCRIPTEN)
-    set(CMAKE_EXECUTABLE_SUFFIX ".html")
-    target_compile_options(telemetry_gui PRIVATE -sUSE_SDL=2)
-    target_link_options(telemetry_gui PRIVATE
-        -sUSE_SDL=2
-        -sUSE_WEBGL2=1
-        -sALLOW_MEMORY_GROWTH=1
-        --preload-file ${CMAKE_SOURCE_DIR}/signals.yaml@signals.yaml
-        --preload-file ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf@fonts/Roboto-Medium.ttf
+if(MINGW OR WIN32)
+    # Windows / MinGW
+    target_link_libraries(telemetry_gui PRIVATE
+        mingw32
+        ${SDL2_LIBRARIES}
+        opengl32
+        ws2_32
+        wsock32
+        imm32
+        winmm
+        gdi32
+        yaml-cpp
     )
-    target_link_libraries(telemetry_gui PRIVATE yaml-cpp)
+    # Static linking for portability
+    set_target_properties(telemetry_gui PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
 else()
-    if(MINGW OR WIN32)
-        # Windows / MinGW
-        target_link_libraries(telemetry_gui PRIVATE
-            mingw32
-            ${SDL2_LIBRARIES}
-            opengl32
-            ws2_32
-            wsock32
-            imm32
-            winmm
-            gdi32
-            yaml-cpp
-        )
-        # Static linking for portability
-        set_target_properties(telemetry_gui PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
-    else()
-        # Linux / Native
-        target_link_libraries(telemetry_gui PRIVATE 
-            ${SDL2_LIBRARIES} 
-            ${OPENGL_LIBRARIES} 
-            yaml-cpp
-            dl
-        )
-    endif()
+    # Linux / Native
+    target_link_libraries(telemetry_gui PRIVATE
+        ${SDL2_LIBRARIES}
+        ${OPENGL_LIBRARIES}
+        yaml-cpp
+        dl
+    )
 endif()
 
 # 8. Test Executables

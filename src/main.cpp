@@ -20,10 +20,6 @@
 #include <thread>
 #include <vector>
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#endif
-
 // Network Includes
 #include "SignalConfigLoader.h"
 #ifdef _WIN32
@@ -136,87 +132,86 @@ std::string GenerateLogFilename() {
 // Helper to read a value from the buffer based on type
 // Supports all stdint.h types plus legacy C types for backwards compatibility
 // All values are cast to double for storage in the signal buffers
-double ReadValue(const char *buffer, const PacketDefinition::Field &field) {
+double ReadValue(const char *buffer, const std::string &type, int offset) {
   // Floating point types
-  if (field.type == "double") {
+  if (type == "double") {
     double val;
-    memcpy(&val, buffer + field.offset, sizeof(double));
+    memcpy(&val, buffer + offset, sizeof(double));
     return val;
-  } else if (field.type == "float") {
+  } else if (type == "float") {
     float val;
-    memcpy(&val, buffer + field.offset, sizeof(float));
+    memcpy(&val, buffer + offset, sizeof(float));
     return (double)val;
   }
   // Signed integer types
-  else if (field.type == "int8_t" || field.type == "int8") {
+  else if (type == "int8_t" || type == "int8") {
     int8_t val;
-    memcpy(&val, buffer + field.offset, sizeof(int8_t));
+    memcpy(&val, buffer + offset, sizeof(int8_t));
     return (double)val;
-  } else if (field.type == "int16_t" || field.type == "int16") {
+  } else if (type == "int16_t" || type == "int16") {
     int16_t val;
-    memcpy(&val, buffer + field.offset, sizeof(int16_t));
+    memcpy(&val, buffer + offset, sizeof(int16_t));
     return (double)val;
-  } else if (field.type == "int32_t" || field.type == "int32" || field.type == "int") {
+  } else if (type == "int32_t" || type == "int32" || type == "int") {
     int32_t val;
-    memcpy(&val, buffer + field.offset, sizeof(int32_t));
+    memcpy(&val, buffer + offset, sizeof(int32_t));
     return (double)val;
-  } else if (field.type == "int64_t" || field.type == "int64") {
+  } else if (type == "int64_t" || type == "int64") {
     int64_t val;
-    memcpy(&val, buffer + field.offset, sizeof(int64_t));
+    memcpy(&val, buffer + offset, sizeof(int64_t));
     return (double)val;
   }
   // Unsigned integer types
-  else if (field.type == "uint8_t" || field.type == "uint8") {
+  else if (type == "uint8_t" || type == "uint8") {
     uint8_t val;
-    memcpy(&val, buffer + field.offset, sizeof(uint8_t));
+    memcpy(&val, buffer + offset, sizeof(uint8_t));
     return (double)val;
-  } else if (field.type == "uint16_t" || field.type == "uint16") {
+  } else if (type == "uint16_t" || type == "uint16") {
     uint16_t val;
-    memcpy(&val, buffer + field.offset, sizeof(uint16_t));
+    memcpy(&val, buffer + offset, sizeof(uint16_t));
     return (double)val;
-  } else if (field.type == "uint32_t" || field.type == "uint32") {
+  } else if (type == "uint32_t" || type == "uint32") {
     uint32_t val;
-    memcpy(&val, buffer + field.offset, sizeof(uint32_t));
+    memcpy(&val, buffer + offset, sizeof(uint32_t));
     return (double)val;
-  } else if (field.type == "uint64_t" || field.type == "uint64") {
+  } else if (type == "uint64_t" || type == "uint64") {
     uint64_t val;
-    memcpy(&val, buffer + field.offset, sizeof(uint64_t));
+    memcpy(&val, buffer + offset, sizeof(uint64_t));
     return (double)val;
   }
   // Standard C types (for backwards compatibility)
-  else if (field.type == "char") {
+  else if (type == "char") {
     char val;
-    memcpy(&val, buffer + field.offset, sizeof(char));
+    memcpy(&val, buffer + offset, sizeof(char));
     return (double)val;
-  } else if (field.type == "short") {
+  } else if (type == "short") {
     short val;
-    memcpy(&val, buffer + field.offset, sizeof(short));
+    memcpy(&val, buffer + offset, sizeof(short));
     return (double)val;
-  } else if (field.type == "long") {
+  } else if (type == "long") {
     long val;
-    memcpy(&val, buffer + field.offset, sizeof(long));
+    memcpy(&val, buffer + offset, sizeof(long));
     return (double)val;
-  } else if (field.type == "unsigned char") {
+  } else if (type == "unsigned char") {
     unsigned char val;
-    memcpy(&val, buffer + field.offset, sizeof(unsigned char));
+    memcpy(&val, buffer + offset, sizeof(unsigned char));
     return (double)val;
-  } else if (field.type == "unsigned short") {
+  } else if (type == "unsigned short") {
     unsigned short val;
-    memcpy(&val, buffer + field.offset, sizeof(unsigned short));
+    memcpy(&val, buffer + offset, sizeof(unsigned short));
     return (double)val;
-  } else if (field.type == "unsigned int") {
+  } else if (type == "unsigned int") {
     unsigned int val;
-    memcpy(&val, buffer + field.offset, sizeof(unsigned int));
+    memcpy(&val, buffer + offset, sizeof(unsigned int));
     return (double)val;
-  } else if (field.type == "unsigned long") {
+  } else if (type == "unsigned long") {
     unsigned long val;
-    memcpy(&val, buffer + field.offset, sizeof(unsigned long));
+    memcpy(&val, buffer + offset, sizeof(unsigned long));
     return (double)val;
   }
 
   // Unknown type - return 0 and warn
-  fprintf(stderr, "Warning: Unknown field type '%s' for field '%s'\n",
-          field.type.c_str(), field.name.c_str());
+  fprintf(stderr, "Warning: Unknown field type '%s'\n", type.c_str());
   return 0.0;
 }
 
@@ -302,20 +297,21 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
 }
 
 void NetworkReceiverThread() {
-  // Load Signals
+  // Load packet definitions
   std::vector<PacketDefinition> packets;
-  std::vector<SignalDefinition> signals;
-  if (!SignalConfigLoader::Load("signals.yaml", packets, signals)) {
+  if (!SignalConfigLoader::Load("signals.yaml", packets)) {
     printf(
         "Failed to load signals.yaml! Network thread will not process data.\n");
     return;
   }
 
-  // Initialize Registry
+  // Initialize signal registry with all signals from all packets
   {
     std::lock_guard<std::mutex> lock(stateMutex);
-    for (const auto &sig : signals) {
-      signalRegistry[sig.key] = Signal(sig.key);
+    for (const auto &pkt : packets) {
+      for (const auto &sig : pkt.signals) {
+        signalRegistry[sig.key] = Signal(sig.key);
+      }
     }
   }
 
@@ -479,39 +475,20 @@ void NetworkReceiverThread() {
 
           std::lock_guard<std::mutex> lock(stateMutex);
 
-          // Dynamic Packet Parsing
-          for (const auto &pkt : packets) {
-            // Basic check: length and header string
-            if (len == (int)pkt.sizeCheck) {
-              if (strncmp(buffer, pkt.headerString.c_str(),
-                          pkt.headerString.length()) == 0) {
+          // Find matching packet by header string
+          for (const PacketDefinition& pkt : packets) {
+            if (strncmp(buffer, pkt.headerString.c_str(),
+                        pkt.headerString.length()) == 0) {
 
-                // Optimize: Map packet ID to relevant signals beforehand?
-                // For now, iterating signals is fine for small count.
-                for (const auto &sig : signals) {
-                  if (sig.packetId == pkt.id) {
-                    // Find fields
-                    const PacketDefinition::Field *timeField = nullptr;
-                    const PacketDefinition::Field *valField = nullptr;
-
-                    for (const auto &f : pkt.fields) {
-                      if (f.name == sig.timeField)
-                        timeField = &f;
-                      if (f.name == sig.valueField)
-                        valField = &f;
-                    }
-
-                    if (timeField && valField) {
-                      double t = ReadValue(buffer, *timeField);
-                      double v = ReadValue(buffer, *valField);
-                      signalRegistry[sig.key].AddPoint(t, v);
-                    }
-                  }
-                }
-
-                // Break after finding the matching packet type for this buffer
-                break;
+              // Matched packet! Process all signals in this packet
+              for (const auto &sig : pkt.signals) {
+                double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
+                double v = ReadValue(buffer, sig.type, sig.offset);
+                signalRegistry[sig.key].AddPoint(t, v);
               }
+
+              // Break after finding the matching packet type
+              break;
             }
           }
         } else {
@@ -588,9 +565,6 @@ void MainLoopStep(void *arg) {
   ImGuiIO &io = ImGui::GetIO();
 
   if (!appRunning) {
-#ifdef __EMSCRIPTEN__
-    emscripten_cancel_main_loop();
-#endif
     return;
   }
 
@@ -851,19 +825,11 @@ int main(int, char **) {
   }
 #endif
 
-#ifdef __EMSCRIPTEN__
-  const char *glsl_version = "#version 100";
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-#else
   const char *glsl_version = "#version 130";
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-#endif
 
   SDL_WindowFlags window_flags =
       (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
@@ -906,15 +872,9 @@ int main(int, char **) {
   // --- NEW STYLING CODE START ---
 
   // 1. Load a bigger, smoother font
-#ifdef __EMSCRIPTEN__
-  if (!io.Fonts->AddFontFromFileTTF("fonts/Roboto-Medium.ttf", 20.0f)) {
-    printf("Warning: Could not load font fonts/Roboto-Medium.ttf, using default font\n");
-  }
-#else
   if (!io.Fonts->AddFontFromFileTTF("Roboto-Medium.ttf", 20.0f)) {
     printf("Warning: Could not load font Roboto-Medium.ttf, using default font\n");
   }
-#endif
 
   // 2. Apply our custom visual style
   SetupImGuiStyle();
@@ -929,9 +889,6 @@ int main(int, char **) {
   ctx.window = window;
   ctx.gl_context = gl_context;
 
-#ifdef __EMSCRIPTEN__
-  emscripten_set_main_loop_arg(MainLoopStep, &ctx, 0, 1);
-#else
   std::thread receiver(NetworkReceiverThread);
   SDL_Event event;
   while (appRunning) {
@@ -950,7 +907,6 @@ int main(int, char **) {
   }
   if (receiver.joinable())
     receiver.join();
-#endif
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplSDL2_Shutdown();

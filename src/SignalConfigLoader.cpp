@@ -2,8 +2,7 @@
 #include <iostream>
 
 bool SignalConfigLoader::Load(const std::string &filename,
-                              std::vector<PacketDefinition> &packets,
-                              std::vector<SignalDefinition> &signals) {
+                              std::vector<PacketDefinition> &packets) {
   try {
     YAML::Node config = YAML::LoadFile(filename);
 
@@ -19,25 +18,49 @@ bool SignalConfigLoader::Load(const std::string &filename,
           timeFieldName = pktNode["time_field"].as<std::string>();
         }
 
+        // Find time field info first
+        int timeOffset = -1;
+        std::string timeType;
+
         if (pktNode["fields"]) {
           for (const auto &fieldNode : pktNode["fields"]) {
-            PacketDefinition::Field field;
-            field.name = fieldNode["name"].as<std::string>();
-            field.type = fieldNode["type"].as<std::string>();
-            field.offset = fieldNode["offset"].as<int>();
-            pkt.fields.push_back(field);
-
-            // Auto-generate signal if this is not the time field
-            if (field.name != timeFieldName) {
-              SignalDefinition sig;
-              sig.key = pkt.id + "." + field.name;
-              sig.packetId = pkt.id;
-              sig.valueField = field.name;
-              sig.timeField = timeFieldName;
-              signals.push_back(sig);
+            std::string fieldName = fieldNode["name"].as<std::string>();
+            if (fieldName == timeFieldName) {
+              timeOffset = fieldNode["offset"].as<int>();
+              timeType = fieldNode["type"].as<std::string>();
+              break;
             }
           }
         }
+
+        if (timeOffset < 0) {
+          std::cerr << "Error: Packet '" << pkt.id
+                    << "' has no time field named '" << timeFieldName << "'" << std::endl;
+          return false;
+        }
+
+        // Now create signals for all non-time fields
+        if (pktNode["fields"]) {
+          for (const auto &fieldNode : pktNode["fields"]) {
+            std::string fieldName = fieldNode["name"].as<std::string>();
+
+            // Skip the time field - it's not a signal
+            if (fieldName == timeFieldName) {
+              continue;
+            }
+
+            SignalDefinition sig;
+            sig.key = pkt.id + "." + fieldName;
+            sig.name = fieldName;
+            sig.type = fieldNode["type"].as<std::string>();
+            sig.offset = fieldNode["offset"].as<int>();
+            sig.timeOffset = timeOffset;
+            sig.timeType = timeType;
+
+            pkt.signals.push_back(sig);
+          }
+        }
+
         packets.push_back(pkt);
       }
     }
