@@ -4,7 +4,6 @@ project(TelemetryGui)
 set(CMAKE_CXX_STANDARD 17)
 
 # Enable Link Time Optimization (LTO/IPO) for smaller binaries
-# Only enable for Release builds to avoid debug build issues
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
 if(ipo_supported)
@@ -16,29 +15,23 @@ else()
     message(STATUS "Link-time optimization (LTO) not supported: ${ipo_error}")
 endif()
 
-# 1. Find System Packages
-if(MINGW OR WIN32)
-    include(FetchContent)
-    message(STATUS "Fetching SDL2 for Windows build...")
+# Fetch SDL2 for Windows
+include(FetchContent)
+message(STATUS "Fetching SDL2 for Windows build...")
 
-    # Force SDL2 to build as a static library
-    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+# Force SDL2 to build as a static library
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
 
-    FetchContent_Declare(
-        SDL2
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG release-2.28.5
-    )
-    FetchContent_MakeAvailable(SDL2)
-    set(SDL2_LIBRARIES SDL2::SDL2main SDL2::SDL2-static)
-else()
-    find_package(SDL2 REQUIRED)
-endif()
+FetchContent_Declare(
+    SDL2
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG release-2.28.5
+)
+FetchContent_MakeAvailable(SDL2)
+set(SDL2_LIBRARIES SDL2::SDL2main SDL2::SDL2-static)
 
 find_package(OpenGL REQUIRED)
-
-include(FetchContent)
 
 # Fetch yaml-cpp
 set(YAML_CPP_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -82,8 +75,7 @@ if(NOT imguifiledialog_POPULATED)
 endif()
 set(IMGUIFILEDIALOG_DIR ${imguifiledialog_SOURCE_DIR})
 
-# 2. ImGui Sources
-# Note: We need core files + the specific backends for SDL2 and OpenGL3
+# ImGui Sources
 set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
@@ -94,19 +86,19 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
-# 3. ImPlot Sources
+# ImPlot Sources
 set(IMPLOT_SOURCES
     ${IMPLOT_DIR}/implot.cpp
     ${IMPLOT_DIR}/implot_items.cpp
     ${IMPLOT_DIR}/implot_demo.cpp
 )
 
-# 4. ImGuiFileDialog Sources
+# ImGuiFileDialog Sources
 set(IMGUIFILEDIALOG_SOURCES
     ${IMGUIFILEDIALOG_DIR}/ImGuiFileDialog.cpp
 )
 
-# 5. Create Executable
+# Create main executable
 add_executable(telemetry_gui
     src/main.cpp
     src/SignalConfigLoader.cpp
@@ -115,7 +107,7 @@ add_executable(telemetry_gui
     ${IMGUIFILEDIALOG_SOURCES}
 )
 
-# 6. Include Directories
+# Include directories
 target_include_directories(telemetry_gui PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
@@ -125,7 +117,7 @@ target_include_directories(telemetry_gui PRIVATE
     src
 )
 
-# 6. Copy resources to build directory
+# Copy resources to build directory
 add_custom_command(TARGET telemetry_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf
@@ -135,33 +127,23 @@ add_custom_command(TARGET telemetry_gui POST_BUILD
         ${CMAKE_CURRENT_BINARY_DIR}/signals.yaml
 )
 
-# 7. Link Libraries
-if(MINGW OR WIN32)
-    # Windows / MinGW
-    target_link_libraries(telemetry_gui PRIVATE
-        mingw32
-        ${SDL2_LIBRARIES}
-        opengl32
-        ws2_32
-        wsock32
-        imm32
-        winmm
-        gdi32
-        yaml-cpp
-    )
-    # Static linking for portability
-    set_target_properties(telemetry_gui PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
-else()
-    # Linux / Native
-    target_link_libraries(telemetry_gui PRIVATE
-        ${SDL2_LIBRARIES}
-        ${OPENGL_LIBRARIES}
-        yaml-cpp
-        dl
-    )
-endif()
+# Link libraries - Windows only
+target_link_libraries(telemetry_gui PRIVATE
+    mingw32
+    ${SDL2_LIBRARIES}
+    opengl32
+    ws2_32
+    wsock32
+    imm32
+    winmm
+    gdi32
+    yaml-cpp
+)
 
-# 8. Test Executables
+# Static linking for portability
+set_target_properties(telemetry_gui PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
+
+# Test executables
 add_executable(test_loader
     src/test_loader.cpp
     src/SignalConfigLoader.cpp
@@ -174,8 +156,6 @@ target_include_directories(struct_size_test PRIVATE src)
 
 add_executable(mock_device src/mock_device.cpp)
 target_include_directories(mock_device PRIVATE src)
-if(MINGW OR WIN32)
-    target_link_libraries(mock_device PRIVATE ws2_32 wsock32)
-    # Static linking for portability
-    set_target_properties(mock_device PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
-endif()
+target_link_libraries(mock_device PRIVATE ws2_32 wsock32)
+# Static linking for portability
+set_target_properties(mock_device PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")

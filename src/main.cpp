@@ -22,18 +22,9 @@
 
 // Network Includes
 #include "SignalConfigLoader.h"
-#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
-#else
-#include <arpa/inet.h>
-#include <cstring>
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <errno.h>
-#endif
 
 // telemetry_defs.h removed as we now use dynamic loading.
 
@@ -110,11 +101,7 @@ std::string GenerateLogFilename() {
   auto now = std::chrono::system_clock::now();
   auto time_t_now = std::chrono::system_clock::to_time_t(now);
   std::tm tm_utc;
-#ifdef _WIN32
   gmtime_s(&tm_utc, &time_t_now);
-#else
-  gmtime_r(&time_t_now, &tm_utc);
-#endif
 
   std::ostringstream oss;
   oss << std::setfill('0')
@@ -315,12 +302,7 @@ void NetworkReceiverThread() {
     }
   }
 
-#ifdef _WIN32
   SOCKET sockfd = INVALID_SOCKET;
-#else
-  int sockfd = -1;
-#endif
-
   char buffer[1024];
 
   while (appRunning) {
@@ -336,7 +318,6 @@ void NetworkReceiverThread() {
       }
 
       // Create socket
-#ifdef _WIN32
       sockfd = socket(AF_INET, SOCK_DGRAM, 0);
       if (sockfd == INVALID_SOCKET) {
         printf("Failed to create socket\n");
@@ -347,18 +328,6 @@ void NetworkReceiverThread() {
       // Set socket to non-blocking mode
       u_long mode = 1;
       ioctlsocket(sockfd, FIONBIO, &mode);
-#else
-      sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-      if (sockfd < 0) {
-        printf("Failed to create socket\n");
-        networkShouldConnect = false;
-        continue;
-      }
-
-      // Set socket to non-blocking mode
-      int flags = fcntl(sockfd, F_GETFL, 0);
-      fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
-#endif
 
       // Setup address
       sockaddr_in servaddr;
@@ -376,13 +345,8 @@ void NetworkReceiverThread() {
       // Bind socket
       if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
         printf("Failed to bind socket to %s:%d\n", ip.c_str(), port);
-#ifdef _WIN32
         closesocket(sockfd);
         sockfd = INVALID_SOCKET;
-#else
-        close(sockfd);
-        sockfd = -1;
-#endif
         networkShouldConnect = false;
         continue;
       }
@@ -405,17 +369,10 @@ void NetworkReceiverThread() {
 
     // Check if we should disconnect
     if (!networkShouldConnect && networkConnected) {
-#ifdef _WIN32
       if (sockfd != INVALID_SOCKET) {
         closesocket(sockfd);
         sockfd = INVALID_SOCKET;
       }
-#else
-      if (sockfd >= 0) {
-        close(sockfd);
-        sockfd = -1;
-      }
-#endif
       networkConnected = false;
       printf("Disconnected\n");
 
@@ -435,7 +392,6 @@ void NetworkReceiverThread() {
 
       // Process all available packets before sleeping
       while (dataAvailable && networkConnected) {
-#ifdef _WIN32
         int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
         if (len == SOCKET_ERROR) {
           int error = WSAGetLastError();
@@ -449,20 +405,6 @@ void NetworkReceiverThread() {
           }
           break;
         }
-#else
-        ssize_t len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
-        if (len < 0) {
-          if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // No more data available
-            dataAvailable = false;
-          } else {
-            // Real error occurred
-            printf("Socket error: %d\n", errno);
-            dataAvailable = false;
-          }
-          break;
-        }
-#endif
 
         if (len > 0) {
           // Log raw packet to file
@@ -506,15 +448,9 @@ void NetworkReceiverThread() {
   }
 
   // Cleanup on exit
-#ifdef _WIN32
   if (sockfd != INVALID_SOCKET) {
     closesocket(sockfd);
   }
-#else
-  if (sockfd >= 0) {
-    close(sockfd);
-  }
-#endif
 }
 
 //
@@ -817,13 +753,12 @@ int main(int, char **) {
     return -1;
   }
 
-#ifdef _WIN32
+  // Initialize Winsock
   WSADATA wsaData;
   if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
     printf("WSAStartup failed\n");
     return -1;
   }
-#endif
 
   const char *glsl_version = "#version 130";
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
@@ -854,11 +789,9 @@ int main(int, char **) {
   SDL_GL_MakeCurrent(window, gl_context);
   SDL_GL_SetSwapInterval(1);
 
-#ifdef _WIN32
   // Windows-specific hints for smoother vsync and timing
   SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
   SDL_SetHint(SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING, "0");
-#endif
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
@@ -916,9 +849,7 @@ int main(int, char **) {
   SDL_DestroyWindow(window);
   SDL_Quit();
 
-#ifdef _WIN32
   WSACleanup();
-#endif
 
   return 0;
 }

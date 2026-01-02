@@ -1,18 +1,8 @@
 # Building Telemetry GUI
 
-This document provides instructions for building the Telemetry GUI on both Linux and Windows platforms.
+This document provides instructions for building the Telemetry GUI on Windows.
 
 ## Prerequisites
-
-### Linux (Ubuntu/Debian)
-
-Install the following packages:
-
-```bash
-sudo apt update
-sudo apt install -y build-essential cmake git \
-    libsdl2-dev libgl1-mesa-dev
-```
 
 ### Windows (MSYS2)
 
@@ -36,43 +26,14 @@ sudo apt install -y build-essential cmake git \
 
 The build system automatically fetches the following dependencies via CMake FetchContent:
 
-- **SDL2** - Cross-platform windowing and input (fetched on Windows, system package on Linux)
+- **SDL2** - Cross-platform windowing and input
 - **ImGui** (docking branch) - Immediate mode GUI framework
 - **ImPlot** - Real-time plotting library for ImGui
 - **yaml-cpp** - YAML configuration file parser
 
 All dependencies are built statically for maximum portability.
 
-## Building on Linux
-
-1. **Clone the repository**
-
-   ```bash
-   git clone <repository-url>
-   cd Telemetry_GUI
-   ```
-
-2. **Configure CMake**
-
-   ```bash
-   mkdir build
-   cd build
-   cmake ..
-   ```
-
-3. **Build**
-
-   ```bash
-   make -j$(nproc)
-   ```
-
-4. **Run**
-
-   ```bash
-   ./telemetry_gui
-   ```
-
-## Building on Windows
+## Building
 
 ### Using MSYS2 UCRT64
 
@@ -145,9 +106,9 @@ cmake --build . --target test_loader
 
 ## Build Configuration
 
-### Static Linking (Windows)
+### Static Linking
 
-All executables are statically linked on Windows for maximum portability. This means:
+All executables are statically linked for maximum portability. This means:
 - No external DLLs required
 - Executables can be copied and run on any Windows machine
 - Larger executable size but easier distribution
@@ -158,28 +119,9 @@ The build system automatically copies required resources to the build directory:
 - `Roboto-Medium.ttf` - Font file for ImGui
 - `signals.yaml` - Signal configuration file
 
-## Cross-Compilation
-
-### Linux to Windows (MinGW Cross-Compile)
-
-The repository includes a cross-compilation toolchain file:
-
-```bash
-mkdir build-mingw
-cd build-mingw
-cmake .. -DCMAKE_TOOLCHAIN_FILE=../cmake/mingw-w64-x86_64.cmake
-make
-```
-
-Note: This requires MinGW-w64 cross-compiler installed on your Linux system:
-
-```bash
-sudo apt install mingw-w64
-```
-
 ## Troubleshooting
 
-### Windows: Missing DLL Errors
+### Missing DLL Errors
 
 If you see errors about missing DLLs despite static linking, do a clean rebuild:
 
@@ -192,14 +134,6 @@ cmake .. -G "MSYS Makefiles" \
 cmake --build .
 ```
 
-### Linux: SDL2 Not Found
-
-If CMake cannot find SDL2:
-
-```bash
-sudo apt install libsdl2-dev
-```
-
 ### Font Loading Warnings
 
 If you see font loading warnings, ensure the build process completed successfully. The font file should be automatically copied to the build directory.
@@ -209,7 +143,7 @@ If you see font loading warnings, ensure the build process completed successfull
 To speed up builds, use multiple cores:
 
 ```bash
-# Linux/MSYS2
+# MSYS2
 make -j$(nproc)
 
 # Or with CMake
