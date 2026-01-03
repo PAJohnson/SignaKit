@@ -1,9 +1,10 @@
 -- Example: Convert GPS speed from m/s to km/h
 -- This creates a new signal "GPS.speedKmh" from the GPS speed in m/s
+-- Uses on_packet to run every time a GPS packet is received
 
 log("Loaded script: gps_speed_kmh.lua")
 
-register_transform("GPS.speedKmh", function()
+on_packet("GPS", "GPS.speedKmh", function()
     local speed_ms = get_signal("GPS.speed")
 
     if speed_ms then

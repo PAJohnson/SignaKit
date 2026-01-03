@@ -38,9 +38,10 @@ public:
         // Expose the signal registry API
         exposeSignalAPI();
 
-        // Expose transform registration API
-        lua.set_function("register_transform", [this](const std::string& outputName, sol::protected_function func) {
-            registerTransform(outputName, func);
+        // Expose packet callback registration API
+        // on_packet(packetType, outputName, function) - registers a callback for a specific packet
+        lua.set_function("on_packet", [this](const std::string& packetType, const std::string& outputName, sol::protected_function func) {
+            registerPacketCallback(packetType, outputName, func);
         });
 
         // Expose logging API
@@ -114,8 +115,8 @@ public:
     void reloadAllScripts() {
         printf("[LuaScriptManager] Reloading all scripts...\n");
 
-        // Clear transforms (they'll be re-registered by scripts)
-        transforms.clear();
+        // Clear packet callbacks (they'll be re-registered by scripts)
+        packetCallbacks.clear();
 
         // Reinitialize Lua state
         initializeLuaState();
@@ -132,39 +133,27 @@ public:
         }
     }
 
-    // Execute all registered transforms on the signal registry
+    // Execute packet callbacks for a specific packet type
     // NOTE: Caller must hold stateMutex lock before calling this function
-    void executeTransforms(std::map<std::string, Signal>& signalRegistry) {
+    // packetType: e.g., "IMU", "GPS", "BAT"
+    void executePacketCallbacks(const std::string& packetType, std::map<std::string, Signal>& signalRegistry, PlaybackMode m = PlaybackMode::ONLINE) {
         // Set the registry so Lua functions can access it
         currentSignalRegistry = &signalRegistry;
 
-        // Get current timestamp (use the latest timestamp from any signal, or system time)
-        // Account for circular buffer wrapping - the latest value is at (offset - 1), not back()
-        double currentTime = 0.0;
-        for (const auto& [name, sig] : signalRegistry) {
-            if (!sig.dataX.empty()) {
-                double lastTime;
-                if (sig.mode == PlaybackMode::ONLINE && sig.dataX.size() >= sig.maxSize) {
-                    // Circular buffer is full - latest value is at (offset - 1)
-                    int latestIndex = (sig.offset - 1 + sig.maxSize) % sig.maxSize;
-                    lastTime = sig.dataX[latestIndex];
-                } else {
-                    // Buffer not full yet, or offline mode - latest is at back()
-                    lastTime = sig.dataX.back();
-                }
+        // Get current timestamp from the packet's signals
+        double currentTime = getCurrentTimestamp(signalRegistry, packetType);
 
-                if (lastTime > currentTime) {
-                    currentTime = lastTime;
-                }
-            }
-        }
+        // Find all callbacks registered for this packet type
+        auto range = packetCallbacks.equal_range(packetType);
+        for (auto it = range.first; it != range.second; ++it) {
+            auto& [outputName, func] = it->second;
 
-        for (auto& [outputName, func] : transforms) {
             try {
                 auto result = func();
                 if (!result.valid()) {
                     sol::error err = result;
-                    printf("[LuaScriptManager] Transform error for '%s': %s\n", outputName.c_str(), err.what());
+                    printf("[LuaScriptManager] Packet callback error for '%s' on packet '%s': %s\n",
+                           outputName.c_str(), packetType.c_str(), err.what());
                     continue;
                 }
 
@@ -176,7 +165,7 @@ public:
 
                         // Get or create the output signal
                         if (signalRegistry.find(outputName) == signalRegistry.end()) {
-                            signalRegistry[outputName] = Signal(outputName);
+                            signalRegistry[outputName] = Signal(outputName, 2000, m);
                         }
 
                         Signal& sig = signalRegistry[outputName];
@@ -184,7 +173,8 @@ public:
                     }
                 }
             } catch (const std::exception& e) {
-                printf("[LuaScriptManager] Exception in transform '%s': %s\n", outputName.c_str(), e.what());
+                printf("[LuaScriptManager] Exception in packet callback '%s' on packet '%s': %s\n",
+                       outputName.c_str(), packetType.c_str(), e.what());
             }
         }
 
@@ -215,10 +205,39 @@ public:
 private:
     sol::state lua;
     std::vector<LuaScript> scripts;
-    std::map<std::string, sol::protected_function> transforms;
 
-    // Pointer to signal registry (set during executeTransforms)
+    // Map: PacketType -> vector of (outputSignalName, luaCallback)
+    std::multimap<std::string, std::pair<std::string, sol::protected_function>> packetCallbacks;
+
+    // Pointer to signal registry (set during executePacketCallbacks)
     std::map<std::string, Signal>* currentSignalRegistry = nullptr;
+
+    // Get current timestamp for a packet type by looking at its signals
+    double getCurrentTimestamp(std::map<std::string, Signal>& signalRegistry, const std::string& packetType) {
+        double currentTime = 0.0;
+
+        // Look for signals belonging to this packet type (e.g., "IMU.accelX" for packet "IMU")
+        for (const auto& [name, sig] : signalRegistry) {
+            // Check if signal name starts with packetType
+            if (name.find(packetType + ".") == 0 && !sig.dataX.empty()) {
+                double lastTime;
+                if (sig.mode == PlaybackMode::ONLINE && sig.dataX.size() >= sig.maxSize) {
+                    // Circular buffer is full - latest value is at (offset - 1)
+                    int latestIndex = (sig.offset - 1 + sig.maxSize) % sig.maxSize;
+                    lastTime = sig.dataX[latestIndex];
+                } else {
+                    // Buffer not full yet, or offline mode - latest is at back()
+                    lastTime = sig.dataX.back();
+                }
+
+                if (lastTime > currentTime) {
+                    currentTime = lastTime;
+                }
+            }
+        }
+
+        return currentTime;
+    }
 
     // Expose signal registry API to Lua
     void exposeSignalAPI() {
@@ -287,16 +306,12 @@ private:
         });
     }
 
-    // Register a transform function
-    void registerTransform(const std::string& outputName, sol::protected_function func) {
-        transforms[outputName] = func;
-        printf("[LuaScriptManager] Registered transform: %s\n", outputName.c_str());
+    // Register a packet callback function
+    // packetType: e.g., "IMU", "GPS", "BAT"
+    // outputName: Name of the derived signal to create
+    // func: Lua function that computes the value
+    void registerPacketCallback(const std::string& packetType, const std::string& outputName, sol::protected_function func) {
+        packetCallbacks.insert({packetType, {outputName, func}});
+        printf("[LuaScriptManager] Registered packet callback for: %s -> %s\n", packetType.c_str(), outputName.c_str());
     }
-
-    // Set the current signal registry (called before executing transforms)
-    void setSignalRegistry(std::map<std::string, Signal>* registry) {
-        currentSignalRegistry = registry;
-    }
-
-    friend void executeTransforms(std::map<std::string, Signal>&, std::mutex&);
 };

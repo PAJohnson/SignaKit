@@ -1,6 +1,7 @@
 -- Example: Simple exponential moving average (EMA) filter
 -- This demonstrates how to maintain state between calls
 -- Creates "IMU.accelX_filtered" from "IMU.accelX"
+-- Uses on_packet to run every time an IMU packet is received
 
 log("Loaded script: simple_filter.lua")
 
@@ -8,7 +9,7 @@ log("Loaded script: simple_filter.lua")
 local filtered_value = nil
 local alpha = 0.1  -- Smoothing factor (0 = no change, 1 = no smoothing)
 
-register_transform("IMU.accelX_filtered", function()
+on_packet("IMU", "IMU.accelX_filtered", function()
     local current = get_signal("IMU.accelX")
 
     if current then

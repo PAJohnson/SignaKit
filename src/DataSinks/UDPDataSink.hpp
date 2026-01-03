@@ -19,6 +19,9 @@ private:
     std::ofstream* logFile;
     std::mutex* logFileMutex;
 
+    // Optional packet callback (for Lua scripts)
+    std::function<void(const std::string&)> packetCallback;
+
 public:
     UDPDataSink(std::map<std::string, Signal>& registry,
                 std::vector<PacketDefinition>& packetDefs,
@@ -32,7 +35,13 @@ public:
         , sockfd(INVALID_SOCKET)
         , logFile(logFilePtr)
         , logFileMutex(logMutex)
+        , packetCallback(nullptr)
     {
+    }
+
+    // Set callback to be invoked when a packet is parsed
+    void setPacketCallback(std::function<void(const std::string&)> callback) {
+        packetCallback = callback;
     }
 
     ~UDPDataSink() override {
@@ -119,6 +128,11 @@ public:
                     double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
                     double v = ReadValue(buffer, sig.type, sig.offset);
                     signalRegistry[sig.key].AddPoint(t, v);
+                }
+
+                // Invoke Lua callback if registered
+                if (packetCallback) {
+                    packetCallback(pkt.id);
                 }
 
                 // Break after finding the matching packet type

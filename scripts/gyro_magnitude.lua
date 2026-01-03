@@ -1,9 +1,10 @@
 -- Example: Compute 3D gyroscope magnitude from individual components
 -- This creates a new signal "IMU.gyroMagnitude" from gyroX, gyroY, gyroZ
+-- Uses on_packet to run every time an IMU packet is received
 
 log("Loaded script: gyro_magnitude.lua")
 
-register_transform("IMU.gyroMagnitude", function()
+on_packet("IMU", "IMU.gyroMagnitude", function()
     local gx = get_signal("IMU.gyroX")
     local gy = get_signal("IMU.gyroY")
     local gz = get_signal("IMU.gyroZ")

@@ -735,6 +735,9 @@ bool LoadLogFile(const std::string &filename) {
           if (t > maxTime) maxTime = t;
         }
 
+        // Execute Lua packet callbacks (NOTE: caller holds stateMutex)
+        luaScriptManager.executePacketCallbacks(pkt.id, signalRegistry, PlaybackMode::OFFLINE);
+
         packetsProcessed++;
         matched = true;
 
@@ -1079,6 +1082,11 @@ void NetworkReceiverThread() {
       // Create new UDP data sink with current connection params
       udpSink = new UDPDataSink(signalRegistry, packets, ip, port, &logFile, &logFileMutex);
 
+      // Set Lua packet callback
+      udpSink->setPacketCallback([](const std::string& packetType) {
+        luaScriptManager.executePacketCallbacks(packetType, signalRegistry);
+      });
+
       if (udpSink->open()) {
         networkConnected = true;
 
@@ -1125,17 +1133,11 @@ void NetworkReceiverThread() {
       bool dataAvailable = true;
 
       // Process all available packets before sleeping
+      // Lua callbacks are invoked automatically by UDPDataSink after each packet
       while (dataAvailable && networkConnected) {
         {
           std::lock_guard<std::mutex> lock(stateMutex);
           dataAvailable = udpSink->step();
-
-          // Execute Lua transforms after processing packet(s)
-          // Do this while we still hold the mutex to ensure consistency
-          if (!dataAvailable) {
-            // No more packets in this burst - execute transforms with latest data
-            luaScriptManager.executeTransforms(signalRegistry);
-          }
         }
         // Release the mutex between packets to allow UI thread to access data
       }
