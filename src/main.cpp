@@ -99,6 +99,15 @@ struct FFTWindow {
   bool logScale = true; // Display magnitude in dB scale
 };
 
+// Colormap types for spectrogram visualization
+enum class Colormap {
+  Viridis,
+  Plasma,
+  Magma,
+  Inferno,
+  ImPlotDefault
+};
+
 // Represents one Spectrogram Plot
 struct SpectrogramWindow {
   int id;
@@ -111,6 +120,8 @@ struct SpectrogramWindow {
   bool logScale = true; // Display magnitude in dB scale
   double timeWindow = 5.0; // Time duration to display (seconds)
   int maxFrequency = 0; // Maximum frequency to display (0 = auto, uses Nyquist/2)
+  Colormap colormap = Colormap::Viridis; // Colormap selection
+  bool useInterpolation = true; // Enable bilinear interpolation for smoother appearance
 };
 
 // -------------------------------------------------------------------------
@@ -348,6 +359,134 @@ void ComputeFFTSpectrum(const std::vector<double>& signalData,
     } else {
       magnitude[i] = mag;
     }
+  }
+}
+
+// -------------------------------------------------------------------------
+// COLORMAP FUNCTIONS (matplotlib-inspired)
+// -------------------------------------------------------------------------
+
+// Helper function to convert RGB to ImU32 color
+inline ImU32 RGBToImU32(double r, double g, double b) {
+  return IM_COL32((int)(r * 255), (int)(g * 255), (int)(b * 255), 255);
+}
+
+// Matplotlib Viridis colormap
+ImU32 GetViridisColor(double t) {
+  t = std::max(0.0, std::min(1.0, t)); // clamp to [0,1]
+
+  // Viridis color data (simplified - 8 control points)
+  const double viridis_data[8][3] = {
+    {0.267004, 0.004874, 0.329415}, // dark purple
+    {0.282623, 0.140926, 0.457517}, // purple
+    {0.253935, 0.265254, 0.529983}, // blue-purple
+    {0.206756, 0.371758, 0.553117}, // blue
+    {0.163625, 0.471133, 0.558148}, // blue-green
+    {0.127568, 0.566949, 0.550556}, // cyan
+    {0.267004, 0.670681, 0.464667}, // green
+    {0.993248, 0.906157, 0.143936}  // yellow
+  };
+
+  int idx = (int)(t * 7);
+  double frac = t * 7 - idx;
+  if (idx >= 7) { idx = 6; frac = 1.0; }
+
+  double r = viridis_data[idx][0] + frac * (viridis_data[idx+1][0] - viridis_data[idx][0]);
+  double g = viridis_data[idx][1] + frac * (viridis_data[idx+1][1] - viridis_data[idx][1]);
+  double b = viridis_data[idx][2] + frac * (viridis_data[idx+1][2] - viridis_data[idx][2]);
+
+  return RGBToImU32(r, g, b);
+}
+
+// Matplotlib Plasma colormap
+ImU32 GetPlasmaColor(double t) {
+  t = std::max(0.0, std::min(1.0, t));
+
+  const double plasma_data[8][3] = {
+    {0.050383, 0.029803, 0.527975}, // dark blue
+    {0.285282, 0.012916, 0.627158}, // purple-blue
+    {0.471456, 0.001749, 0.657879}, // purple
+    {0.617331, 0.055384, 0.621654}, // magenta
+    {0.752299, 0.134462, 0.532027}, // red-magenta
+    {0.862356, 0.237835, 0.402367}, // red
+    {0.952978, 0.391973, 0.257267}, // orange
+    {0.940015, 0.975158, 0.131326}  // yellow
+  };
+
+  int idx = (int)(t * 7);
+  double frac = t * 7 - idx;
+  if (idx >= 7) { idx = 6; frac = 1.0; }
+
+  double r = plasma_data[idx][0] + frac * (plasma_data[idx+1][0] - plasma_data[idx][0]);
+  double g = plasma_data[idx][1] + frac * (plasma_data[idx+1][1] - plasma_data[idx][1]);
+  double b = plasma_data[idx][2] + frac * (plasma_data[idx+1][2] - plasma_data[idx][2]);
+
+  return RGBToImU32(r, g, b);
+}
+
+// Matplotlib Magma colormap
+ImU32 GetMagmaColor(double t) {
+  t = std::max(0.0, std::min(1.0, t));
+
+  const double magma_data[8][3] = {
+    {0.001462, 0.000466, 0.013866}, // near black
+    {0.103093, 0.050344, 0.298563}, // dark purple
+    {0.258234, 0.089412, 0.456520}, // purple
+    {0.427397, 0.123488, 0.563896}, // blue-purple
+    {0.619043, 0.176991, 0.569720}, // magenta
+    {0.822586, 0.304561, 0.487138}, // pink-red
+    {0.968932, 0.534931, 0.383229}, // orange
+    {0.987053, 0.991438, 0.749504}  // pale yellow
+  };
+
+  int idx = (int)(t * 7);
+  double frac = t * 7 - idx;
+  if (idx >= 7) { idx = 6; frac = 1.0; }
+
+  double r = magma_data[idx][0] + frac * (magma_data[idx+1][0] - magma_data[idx][0]);
+  double g = magma_data[idx][1] + frac * (magma_data[idx+1][1] - magma_data[idx][1]);
+  double b = magma_data[idx][2] + frac * (magma_data[idx+1][2] - magma_data[idx][2]);
+
+  return RGBToImU32(r, g, b);
+}
+
+// Matplotlib Inferno colormap
+ImU32 GetInfernoColor(double t) {
+  t = std::max(0.0, std::min(1.0, t));
+
+  const double inferno_data[8][3] = {
+    {0.001462, 0.000466, 0.013866}, // near black
+    {0.087411, 0.044556, 0.224813}, // dark purple
+    {0.258234, 0.038571, 0.406485}, // purple
+    {0.451465, 0.042786, 0.463605}, // blue-purple
+    {0.659135, 0.105015, 0.408614}, // magenta-red
+    {0.847074, 0.246514, 0.249368}, // red
+    {0.965225, 0.495257, 0.120458}, // orange
+    {0.988362, 0.998364, 0.644924}  // pale yellow
+  };
+
+  int idx = (int)(t * 7);
+  double frac = t * 7 - idx;
+  if (idx >= 7) { idx = 6; frac = 1.0; }
+
+  double r = inferno_data[idx][0] + frac * (inferno_data[idx+1][0] - inferno_data[idx][0]);
+  double g = inferno_data[idx][1] + frac * (inferno_data[idx+1][1] - inferno_data[idx][1]);
+  double b = inferno_data[idx][2] + frac * (inferno_data[idx+1][2] - inferno_data[idx][2]);
+
+  return RGBToImU32(r, g, b);
+}
+
+// Get color from selected colormap
+ImU32 GetColormapColor(Colormap colormap, double t) {
+  switch (colormap) {
+    case Colormap::Viridis: return GetViridisColor(t);
+    case Colormap::Plasma: return GetPlasmaColor(t);
+    case Colormap::Magma: return GetMagmaColor(t);
+    case Colormap::Inferno: return GetInfernoColor(t);
+    case Colormap::ImPlotDefault:
+    default:
+      // Fallback to simple gradient if ImPlot default is selected
+      return IM_COL32((int)(t * 255), 0, (int)((1.0 - t) * 255), 255);
   }
 }
 
@@ -1954,6 +2093,19 @@ void MainLoopStep(void *arg) {
         ImGui::SetNextItemWidth(150);
         ImGui::DragInt("##MaxFreq", &spectrogram.maxFrequency, 10.0f, 0, 5000, spectrogram.maxFrequency == 0 ? "Auto" : "%d Hz");
 
+        ImGui::SameLine();
+        ImGui::Text("Colormap:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        const char* colormapItems[] = { "Viridis", "Plasma", "Magma", "Inferno", "ImPlot Default" };
+        int colormapIdx = (int)spectrogram.colormap;
+        if (ImGui::Combo("##Colormap", &colormapIdx, colormapItems, IM_ARRAYSIZE(colormapItems))) {
+          spectrogram.colormap = (Colormap)colormapIdx;
+        }
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Interpolation", &spectrogram.useInterpolation);
+
         if (!sig.dataY.empty()) {
           // Collect data points based on mode
           std::vector<double> dataToAnalyze;
@@ -2004,40 +2156,97 @@ void MainLoopStep(void *arg) {
               ImGui::Text("Sampling Freq: %.2f Hz | Time Bins: %zu | Freq Bins: %zu | Freq Res: %.3f Hz",
                          fs, timeBins.size(), freqBins.size(), fs / spectrogram.fftSize);
 
-              // Plot the spectrogram as a heatmap
+              // Plot the spectrogram
               if (ImPlot::BeginPlot("##SpectrogramPlot", ImVec2(-1, -1))) {
                 const char* yAxisLabel = "Frequency (Hz)";
-                const char* zAxisLabel = spectrogram.logScale ? "Magnitude (dB)" : "Magnitude";
                 ImPlot::SetupAxes("Time (s)", yAxisLabel, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
 
-                // Determine bounds for the heatmap
+                // Determine bounds
+                int numTimeBins = timeBins.size();
+                int numFreqBins = freqBins.size();
                 double timeMin = timeBins.front();
                 double timeMax = timeBins.back();
                 double freqMin = freqBins.front();
                 double freqMax = freqBins.back();
 
-                // ImPlot::PlotHeatmap expects data in column-major format, but we have row-major
-                // We need to transpose the data
-                int numTimeBins = timeBins.size();
-                int numFreqBins = freqBins.size();
-                std::vector<double> transposedMatrix(numTimeBins * numFreqBins);
+                // Find min/max magnitude for normalization
+                double magMin = *std::min_element(magnitudeMatrix.begin(), magnitudeMatrix.end());
+                double magMax = *std::max_element(magnitudeMatrix.begin(), magnitudeMatrix.end());
+                double magRange = magMax - magMin;
+                if (magRange < 1e-10) magRange = 1.0; // avoid division by zero
 
-                for (int t = 0; t < numTimeBins; t++) {
-                  for (int f = 0; f < numFreqBins; f++) {
-                    // Transpose and flip frequency axis (so low freq at bottom, high at top)
-                    int srcIdx = t * numFreqBins + f;
-                    int dstIdx = (numFreqBins - 1 - f) * numTimeBins + t;
-                    transposedMatrix[dstIdx] = magnitudeMatrix[srcIdx];
+                // Use custom colormap rendering if not ImPlotDefault
+                if (spectrogram.colormap != Colormap::ImPlotDefault) {
+                  // Setup axis limits explicitly for custom rendering
+                  ImPlot::SetupAxisLimits(ImAxis_X1, timeMin, timeMax, ImGuiCond_Always);
+                  ImPlot::SetupAxisLimits(ImAxis_Y1, freqMin, freqMax, ImGuiCond_Always);
+
+                  // Custom rendering with matplotlib-style colormaps
+                  ImDrawList* draw_list = ImPlot::GetPlotDrawList();
+
+                  // Determine pixel resolution for interpolation
+                  int pixelsPerTimeBin = spectrogram.useInterpolation ? 4 : 1;
+                  int pixelsPerFreqBin = spectrogram.useInterpolation ? 4 : 1;
+
+                  // Render rectangles for each bin/pixel
+                  for (int t = 0; t < numTimeBins - 1; t++) {
+                    for (int tSub = 0; tSub < pixelsPerTimeBin; tSub++) {
+                      double tFrac = (double)tSub / pixelsPerTimeBin;
+                      double time0 = timeBins[t] + tFrac * (timeBins[t+1] - timeBins[t]);
+                      double time1 = timeBins[t] + (tFrac + 1.0/pixelsPerTimeBin) * (timeBins[t+1] - timeBins[t]);
+
+                      for (int f = 0; f < numFreqBins - 1; f++) {
+                        for (int fSub = 0; fSub < pixelsPerFreqBin; fSub++) {
+                          double fFrac = (double)fSub / pixelsPerFreqBin;
+                          double freq0 = freqBins[f] + fFrac * (freqBins[f+1] - freqBins[f]);
+                          double freq1 = freqBins[f] + (fFrac + 1.0/pixelsPerFreqBin) * (freqBins[f+1] - freqBins[f]);
+
+                          // Bilinear interpolation
+                          double mag;
+                          if (spectrogram.useInterpolation) {
+                            double t00 = magnitudeMatrix[t * numFreqBins + f];
+                            double t10 = magnitudeMatrix[(t+1) * numFreqBins + f];
+                            double t01 = magnitudeMatrix[t * numFreqBins + (f+1)];
+                            double t11 = magnitudeMatrix[(t+1) * numFreqBins + (f+1)];
+
+                            double interpT = tFrac;
+                            double interpF = fFrac;
+                            mag = (1-interpT)*(1-interpF)*t00 + interpT*(1-interpF)*t10 +
+                                  (1-interpT)*interpF*t01 + interpT*interpF*t11;
+                          } else {
+                            mag = magnitudeMatrix[t * numFreqBins + f];
+                          }
+
+                          // Normalize to [0,1]
+                          double normalized = (mag - magMin) / magRange;
+                          ImU32 color = GetColormapColor(spectrogram.colormap, normalized);
+
+                          // Convert to plot coordinates
+                          ImVec2 p0 = ImPlot::PlotToPixels(time0, freq0);
+                          ImVec2 p1 = ImPlot::PlotToPixels(time1, freq1);
+
+                          draw_list->AddRectFilled(p0, p1, color);
+                        }
+                      }
+                    }
                   }
+                } else {
+                  // Use ImPlot default heatmap
+                  std::vector<double> transposedMatrix(numTimeBins * numFreqBins);
+                  for (int t = 0; t < numTimeBins; t++) {
+                    for (int f = 0; f < numFreqBins; f++) {
+                      int srcIdx = t * numFreqBins + f;
+                      int dstIdx = (numFreqBins - 1 - f) * numTimeBins + t;
+                      transposedMatrix[dstIdx] = magnitudeMatrix[srcIdx];
+                    }
+                  }
+                  ImPlot::PlotHeatmap("##HeatmapData", transposedMatrix.data(),
+                                     numFreqBins, numTimeBins,
+                                     0.0, 0.0,
+                                     nullptr,
+                                     ImPlotPoint(timeMin, freqMin),
+                                     ImPlotPoint(timeMax, freqMax));
                 }
-
-                // Plot the heatmap
-                ImPlot::PlotHeatmap("##HeatmapData", transposedMatrix.data(),
-                                   numFreqBins, numTimeBins,
-                                   0.0, 0.0, // scale_min, scale_max (0 = auto)
-                                   nullptr,  // label_fmt
-                                   ImPlotPoint(timeMin, freqMin),
-                                   ImPlotPoint(timeMax, freqMax));
 
                 ImPlot::EndPlot();
               }
