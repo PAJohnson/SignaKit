@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command \"\\(Get-Content ''c:\\\\Users\\\\pajoh\\\\repos\\\\Telemetry_GUI\\\\src\\\\main.cpp''\\).Count\")"
+    ]
+  }
+}
