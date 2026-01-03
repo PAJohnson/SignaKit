@@ -8,6 +8,7 @@
 #include <algorithm> // For std::find
 #include <atomic>
 #include <chrono>
+#include <cmath> // For FFT functions
 #include <cstdint>
 #include <ctime>
 #include <fstream>
@@ -21,6 +22,10 @@
 #include <thread>
 #include <vector>
 #include <iostream>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // Network Includes
 #include "SignalConfigLoader.h"
@@ -83,6 +88,17 @@ struct HistogramWindow {
   int numBins = 50; // Number of histogram bins
 };
 
+// Represents one FFT Plot
+struct FFTWindow {
+  int id;
+  std::string title;
+  std::string signalName; // Single signal to display (empty if none assigned)
+  bool isOpen = true;
+  int fftSize = 2048; // Number of samples for FFT (power of 2)
+  bool useHanning = true; // Apply Hanning window to reduce spectral leakage
+  bool logScale = true; // Display magnitude in dB scale
+};
+
 // -------------------------------------------------------------------------
 // GLOBAL STATE
 // -------------------------------------------------------------------------
@@ -131,6 +147,191 @@ int nextXYPlotId = 1; // Auto-increment ID for X/Y plot titles
 // Histograms
 std::vector<HistogramWindow> activeHistograms;
 int nextHistogramId = 1; // Auto-increment ID for histogram titles
+
+// FFT plots
+std::vector<FFTWindow> activeFFTs;
+int nextFFTId = 1; // Auto-increment ID for FFT titles
+
+// -------------------------------------------------------------------------
+// FFT HELPER FUNCTIONS
+// -------------------------------------------------------------------------
+
+// Complex number structure for FFT
+struct Complex {
+  double real;
+  double imag;
+
+  Complex(double r = 0.0, double i = 0.0) : real(r), imag(i) {}
+
+  Complex operator+(const Complex& other) const {
+    return Complex(real + other.real, imag + other.imag);
+  }
+
+  Complex operator-(const Complex& other) const {
+    return Complex(real - other.real, imag - other.imag);
+  }
+
+  Complex operator*(const Complex& other) const {
+    return Complex(real * other.real - imag * other.imag,
+                   real * other.imag + imag * other.real);
+  }
+
+  double magnitude() const {
+    return sqrt(real * real + imag * imag);
+  }
+};
+
+// Calculate average sampling frequency from time points
+double CalculateSamplingFrequency(const std::vector<double>& timePoints, int startIdx, int numSamples) {
+  if (numSamples < 2 || startIdx + numSamples > (int)timePoints.size()) {
+    return 1.0; // Default fallback
+  }
+
+  // Calculate average time delta
+  double totalDelta = 0.0;
+  int deltaCount = 0;
+
+  for (int i = startIdx; i < startIdx + numSamples - 1; i++) {
+    double delta = timePoints[i + 1] - timePoints[i];
+    if (delta > 0.0) { // Only count positive deltas
+      totalDelta += delta;
+      deltaCount++;
+    }
+  }
+
+  if (deltaCount > 0) {
+    double avgDelta = totalDelta / deltaCount;
+    return 1.0 / avgDelta; // Sampling frequency = 1 / average period
+  }
+
+  return 1.0; // Fallback
+}
+
+// Apply Hanning window to reduce spectral leakage
+void ApplyHanningWindow(std::vector<double>& data) {
+  int N = data.size();
+  for (int i = 0; i < N; i++) {
+    double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (N - 1)));
+    data[i] *= window;
+  }
+}
+
+// Cooley-Tukey FFT algorithm (radix-2 decimation-in-time)
+void FFT(std::vector<Complex>& data) {
+  int N = data.size();
+  if (N <= 1) return;
+
+  // Check if N is a power of 2
+  if ((N & (N - 1)) != 0) {
+    fprintf(stderr, "FFT size must be a power of 2\n");
+    return;
+  }
+
+  // Bit-reversal permutation
+  int bits = 0;
+  int temp = N;
+  while (temp > 1) {
+    temp >>= 1;
+    bits++;
+  }
+
+  for (int i = 0; i < N; i++) {
+    int j = 0;
+    int temp_i = i;
+    for (int b = 0; b < bits; b++) {
+      j = (j << 1) | (temp_i & 1);
+      temp_i >>= 1;
+    }
+    if (j > i) {
+      std::swap(data[i], data[j]);
+    }
+  }
+
+  // FFT computation
+  for (int s = 1; s <= bits; s++) {
+    int m = 1 << s; // 2^s
+    int m2 = m >> 1; // m/2
+
+    Complex w(1.0, 0.0);
+    double angle = -M_PI / m2;
+    Complex wm(cos(angle), sin(angle));
+
+    for (int j = 0; j < m2; j++) {
+      for (int k = j; k < N; k += m) {
+        Complex t = w * data[k + m2];
+        Complex u = data[k];
+        data[k] = u + t;
+        data[k + m2] = u - t;
+      }
+      w = w * wm;
+    }
+  }
+}
+
+// Compute FFT magnitude spectrum from signal data
+// Returns frequency bins and magnitude values
+void ComputeFFTSpectrum(const std::vector<double>& signalData,
+                       const std::vector<double>& timePoints,
+                       int fftSize,
+                       bool useHanning,
+                       bool logScale,
+                       std::vector<double>& freqBins,
+                       std::vector<double>& magnitude) {
+
+  if (signalData.size() < (size_t)fftSize) {
+    // Not enough data
+    freqBins.clear();
+    magnitude.clear();
+    return;
+  }
+
+  // Calculate sampling frequency
+  double fs = CalculateSamplingFrequency(timePoints, 0, std::min(fftSize, (int)timePoints.size()));
+
+  // Prepare data for FFT (use most recent samples)
+  int startIdx = signalData.size() - fftSize;
+  std::vector<double> windowedData(fftSize);
+  for (int i = 0; i < fftSize; i++) {
+    windowedData[i] = signalData[startIdx + i];
+  }
+
+  // Apply window function if requested
+  if (useHanning) {
+    ApplyHanningWindow(windowedData);
+  }
+
+  // Convert to complex and perform FFT
+  std::vector<Complex> fftData(fftSize);
+  for (int i = 0; i < fftSize; i++) {
+    fftData[i] = Complex(windowedData[i], 0.0);
+  }
+
+  FFT(fftData);
+
+  // Extract magnitude spectrum (only first half, since FFT is symmetric for real signals)
+  int numFreqBins = fftSize / 2;
+  freqBins.resize(numFreqBins);
+  magnitude.resize(numFreqBins);
+
+  double freqResolution = fs / fftSize;
+
+  for (int i = 0; i < numFreqBins; i++) {
+    freqBins[i] = i * freqResolution;
+    double mag = fftData[i].magnitude();
+
+    // Normalize by FFT size
+    mag = mag / fftSize;
+
+    // Convert to dB if requested
+    if (logScale) {
+      // Add small epsilon to avoid log(0)
+      const double epsilon = 1e-10;
+      magnitude[i] = 20.0 * log10(mag + epsilon);
+    } else {
+      magnitude[i] = mag;
+    }
+  }
+}
 
 // -------------------------------------------------------------------------
 // NETWORK THREAD
@@ -273,7 +474,7 @@ bool LoadLogFile(const std::string &filename) {
 // -------------------------------------------------------------------------
 // LAYOUT SAVE/LOAD
 // -------------------------------------------------------------------------
-bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots, const std::vector<ReadoutBox> &readouts, const std::vector<XYPlotWindow> &xyPlots, const std::vector<HistogramWindow> &histograms) {
+bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots, const std::vector<ReadoutBox> &readouts, const std::vector<XYPlotWindow> &xyPlots, const std::vector<HistogramWindow> &histograms, const std::vector<FFTWindow> &ffts) {
   try {
     YAML::Emitter out;
     out << YAML::BeginMap;
@@ -330,6 +531,20 @@ bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plot
     }
     out << YAML::EndSeq;
 
+    // Save FFT plots
+    out << YAML::Key << "ffts" << YAML::Value << YAML::BeginSeq;
+    for (const auto &fft : ffts) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << fft.id;
+      out << YAML::Key << "title" << YAML::Value << fft.title;
+      out << YAML::Key << "signal" << YAML::Value << fft.signalName;
+      out << YAML::Key << "fftSize" << YAML::Value << fft.fftSize;
+      out << YAML::Key << "useHanning" << YAML::Value << fft.useHanning;
+      out << YAML::Key << "logScale" << YAML::Value << fft.logScale;
+      out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+
     out << YAML::EndMap;
 
     std::ofstream fout(filename);
@@ -351,7 +566,8 @@ bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plot
 bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int &nextPlotId,
                 std::vector<ReadoutBox> &readouts, int &nextReadoutId,
                 std::vector<XYPlotWindow> &xyPlots, int &nextXYPlotId,
-                std::vector<HistogramWindow> &histograms, int &nextHistogramId) {
+                std::vector<HistogramWindow> &histograms, int &nextHistogramId,
+                std::vector<FFTWindow> &ffts, int &nextFFTId) {
   try {
     YAML::Node config = YAML::LoadFile(filename);
     if (!config["plots"]) {
@@ -363,10 +579,12 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
     std::vector<ReadoutBox> loadedReadouts;
     std::vector<XYPlotWindow> loadedXYPlots;
     std::vector<HistogramWindow> loadedHistograms;
+    std::vector<FFTWindow> loadedFFTs;
     int maxPlotId = 0;
     int maxReadoutId = 0;
     int maxXYPlotId = 0;
     int maxHistogramId = 0;
+    int maxFFTId = 0;
 
     // Load plots
     for (const auto &plotNode : config["plots"]) {
@@ -439,14 +657,35 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
       }
     }
 
+    // Load FFT plots (if present)
+    if (config["ffts"]) {
+      for (const auto &fftNode : config["ffts"]) {
+        FFTWindow fft;
+        fft.id = fftNode["id"].as<int>();
+        fft.title = fftNode["title"].as<std::string>();
+        fft.signalName = fftNode["signal"] ? fftNode["signal"].as<std::string>() : "";
+        fft.fftSize = fftNode["fftSize"] ? fftNode["fftSize"].as<int>() : 2048;
+        fft.useHanning = fftNode["useHanning"] ? fftNode["useHanning"].as<bool>() : true;
+        fft.logScale = fftNode["logScale"] ? fftNode["logScale"].as<bool>() : true;
+        fft.isOpen = true;
+
+        loadedFFTs.push_back(fft);
+        if (fft.id > maxFFTId) {
+          maxFFTId = fft.id;
+        }
+      }
+    }
+
     plots = loadedPlots;
     readouts = loadedReadouts;
     xyPlots = loadedXYPlots;
     histograms = loadedHistograms;
+    ffts = loadedFFTs;
     nextPlotId = maxPlotId + 1;
     nextReadoutId = maxReadoutId + 1;
     nextXYPlotId = maxXYPlotId + 1;
     nextHistogramId = maxHistogramId + 1;
+    nextFFTId = maxFFTId + 1;
     printf("Layout loaded from: %s\n", filename.c_str());
     return true;
   } catch (const std::exception &e) {
@@ -786,6 +1025,13 @@ void MainLoopStep(void *arg) {
       newHistogram.title = "Histogram " + std::to_string(newHistogram.id);
       newHistogram.signalName = ""; // Empty initially
       activeHistograms.push_back(newHistogram);
+    }
+    if (ImGui::MenuItem("FFT Plot")) {
+      FFTWindow newFFT;
+      newFFT.id = nextFFTId++;
+      newFFT.title = "FFT " + std::to_string(newFFT.id);
+      newFFT.signalName = ""; // Empty initially
+      activeFFTs.push_back(newFFT);
     }
     ImGui::EndPopup();
   }
@@ -1254,6 +1500,160 @@ void MainLoopStep(void *arg) {
   }
 
   // ---------------------------------------------------------
+  // UI: FFT PLOTS
+  // ---------------------------------------------------------
+
+  // Loop through all active FFT plots
+  for (auto &fft : activeFFTs) {
+    if (!fft.isOpen)
+      continue;
+
+    // Set initial position below menu bar for new FFT windows
+    ImGui::SetNextWindowPos(ImVec2(350, menuBarHeight + 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+
+    // Use a stable ID (based on fft.id) while displaying dynamic title
+    std::string windowID = fft.title + "##FFT" + std::to_string(fft.id);
+    ImGui::Begin(windowID.c_str(), &fft.isOpen);
+
+    // Display content based on whether a signal is assigned
+    if (fft.signalName.empty()) {
+      // Show drag-and-drop message
+      ImVec2 windowSize = ImGui::GetWindowSize();
+      const char* text = "Drag and drop a signal here";
+      ImVec2 textSize = ImGui::CalcTextSize(text);
+      ImGui::SetCursorPosX((windowSize.x - textSize.x) * 0.5f);
+      ImGui::SetCursorPosY((windowSize.y - textSize.y) * 0.5f);
+      ImGui::TextWrapped("%s", text);
+
+      // Accept drag-and-drop for the entire window
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+          std::string droppedName = (const char *)payload->Data;
+          fft.signalName = droppedName;
+          fft.title = droppedName + " FFT";
+        }
+        ImGui::EndDragDropTarget();
+      }
+    } else {
+      // Display the FFT
+      if (signalRegistry.count(fft.signalName)) {
+        Signal &sig = signalRegistry[fft.signalName];
+
+        // Controls at the top
+        ImGui::Text("FFT Size:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(150);
+        const char* fftSizeItems[] = { "128", "256", "512", "1024", "2048", "4096", "8192" };
+        int fftSizeIdx = 4; // Default to 2048
+        if (fft.fftSize == 128) fftSizeIdx = 0;
+        else if (fft.fftSize == 256) fftSizeIdx = 1;
+        else if (fft.fftSize == 512) fftSizeIdx = 2;
+        else if (fft.fftSize == 1024) fftSizeIdx = 3;
+        else if (fft.fftSize == 2048) fftSizeIdx = 4;
+        else if (fft.fftSize == 4096) fftSizeIdx = 5;
+        else if (fft.fftSize == 8192) fftSizeIdx = 6;
+
+        if (ImGui::Combo("##FFTSize", &fftSizeIdx, fftSizeItems, IM_ARRAYSIZE(fftSizeItems))) {
+          fft.fftSize = 1 << (fftSizeIdx + 7); // 2^(idx+7): 128, 256, 512, 1024, 2048, 4096, 8192
+        }
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Hanning Window", &fft.useHanning);
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Log Scale (dB)", &fft.logScale);
+
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Signal")) {
+          fft.signalName = "";
+          fft.title = "FFT " + std::to_string(fft.id);
+        }
+
+        if (!sig.dataY.empty()) {
+          // Collect data points based on mode
+          std::vector<double> dataToFFT;
+          std::vector<double> timeToFFT;
+
+          if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
+            // Offline mode: collect all data up to current time window end
+            double targetTime = offlineState.currentWindowStart + offlineState.windowWidth;
+            for (size_t i = 0; i < sig.dataX.size(); i++) {
+              if (sig.dataX[i] <= targetTime) {
+                timeToFFT.push_back(sig.dataX[i]);
+                dataToFFT.push_back(sig.dataY[i]);
+              } else {
+                break; // Assuming data is chronologically ordered
+              }
+            }
+          } else {
+            // Online mode: use all data in the circular buffer
+            if (sig.mode == PlaybackMode::ONLINE && sig.dataY.size() == sig.maxSize) {
+              // Buffer is full, use circular logic
+              for (size_t i = 0; i < sig.dataY.size(); i++) {
+                int idx = (sig.offset + i) % sig.dataY.size();
+                timeToFFT.push_back(sig.dataX[idx]);
+                dataToFFT.push_back(sig.dataY[idx]);
+              }
+            } else {
+              // Buffer not full yet, use all data
+              timeToFFT = sig.dataX;
+              dataToFFT = sig.dataY;
+            }
+          }
+
+          if (dataToFFT.size() >= (size_t)fft.fftSize) {
+            // Compute FFT spectrum
+            std::vector<double> freqBins;
+            std::vector<double> magnitude;
+
+            ComputeFFTSpectrum(dataToFFT, timeToFFT, fft.fftSize, fft.useHanning, fft.logScale, freqBins, magnitude);
+
+            if (!freqBins.empty() && !magnitude.empty()) {
+              // Calculate sampling frequency for display
+              double fs = CalculateSamplingFrequency(timeToFFT, std::max(0, (int)timeToFFT.size() - fft.fftSize),
+                                                     std::min(fft.fftSize, (int)timeToFFT.size()));
+
+              ImGui::Text("Sampling Frequency: %.2f Hz | Frequency Resolution: %.3f Hz",
+                         fs, fs / fft.fftSize);
+
+              // Plot the FFT spectrum
+              if (ImPlot::BeginPlot("##FFTPlot", ImVec2(-1, -1))) {
+                const char* yAxisLabel = fft.logScale ? "Magnitude (dB)" : "Magnitude";
+                ImPlot::SetupAxes("Frequency (Hz)", yAxisLabel, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+
+                ImPlot::PlotLine("##FFTLine", freqBins.data(), magnitude.data(), (int)freqBins.size());
+
+                ImPlot::EndPlot();
+              }
+            } else {
+              ImGui::TextDisabled("FFT computation failed");
+            }
+          } else {
+            ImGui::TextDisabled("Not enough data for FFT (need %d samples, have %zu)", fft.fftSize, dataToFFT.size());
+          }
+        } else {
+          ImGui::TextDisabled("No data");
+        }
+      } else {
+        ImGui::TextDisabled("Signal not found");
+      }
+
+      // Accept drag-and-drop to change signal
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+          std::string droppedName = (const char *)payload->Data;
+          fft.signalName = droppedName;
+          fft.title = droppedName + " FFT";
+        }
+        ImGui::EndDragDropTarget();
+      }
+    }
+
+    ImGui::End();
+  }
+
+  // ---------------------------------------------------------
   // UI: TIME SLIDER (Offline Mode Only)
   // ---------------------------------------------------------
   if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
@@ -1320,7 +1720,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("SaveLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      SaveLayout(filePathName, activePlots, activeReadoutBoxes, activeXYPlots, activeHistograms);
+      SaveLayout(filePathName, activePlots, activeReadoutBoxes, activeXYPlots, activeHistograms, activeFFTs);
     }
     ImGuiFileDialog::Instance()->Close();
   }
@@ -1329,7 +1729,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("OpenLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId, activeHistograms, nextHistogramId)) {
+      if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId, activeHistograms, nextHistogramId, activeFFTs, nextFFTId)) {
         // Layout loaded successfully
       }
     }

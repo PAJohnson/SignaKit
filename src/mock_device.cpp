@@ -46,7 +46,7 @@ void imu_thread_func(int sockfd, sockaddr_in dest_addr) {
         
         packet.time = t;
         // Generate interesting waveform data
-        packet.accelX = (float)sin(t);
+        packet.accelX = (float)sin(t) + (float)sin(2.0 * 3.14159 * 10 * t);
         packet.accelY = (float)cos(t);
         packet.accelZ = (float)(sin(t * 0.5) * 2.0f);
         
