@@ -46,7 +46,7 @@ void imu_thread_func(int sockfd, sockaddr_in dest_addr) {
         
         packet.time = t;
         // Generate interesting waveform data
-        packet.accelX = (float)sin(t) + (float)sin(2.0 * 3.14159 * 10 * t);
+        packet.accelX = (float)sin(2.0 * 3.14159 * 5 * t) + (float)sin(2.0 * 3.14159 * 25 * t);
         packet.accelY = (float)cos(t);
         packet.accelZ = (float)(sin(t * 0.5) * 2.0f);
         
@@ -57,8 +57,8 @@ void imu_thread_func(int sockfd, sockaddr_in dest_addr) {
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
 
-        // ~100Hz
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // ~500Hz
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 }
 

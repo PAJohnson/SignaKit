@@ -99,6 +99,20 @@ struct FFTWindow {
   bool logScale = true; // Display magnitude in dB scale
 };
 
+// Represents one Spectrogram Plot
+struct SpectrogramWindow {
+  int id;
+  std::string title;
+  std::string signalName; // Single signal to display (empty if none assigned)
+  bool isOpen = true;
+  int fftSize = 512; // Number of samples per FFT window (power of 2)
+  int hopSize = 128; // Number of samples to advance between FFT windows
+  bool useHanning = true; // Apply Hanning window to reduce spectral leakage
+  bool logScale = true; // Display magnitude in dB scale
+  double timeWindow = 5.0; // Time duration to display (seconds)
+  int maxFrequency = 0; // Maximum frequency to display (0 = auto, uses Nyquist/2)
+};
+
 // -------------------------------------------------------------------------
 // GLOBAL STATE
 // -------------------------------------------------------------------------
@@ -151,6 +165,10 @@ int nextHistogramId = 1; // Auto-increment ID for histogram titles
 // FFT plots
 std::vector<FFTWindow> activeFFTs;
 int nextFFTId = 1; // Auto-increment ID for FFT titles
+
+// Spectrogram plots
+std::vector<SpectrogramWindow> activeSpectrograms;
+int nextSpectrogramId = 1; // Auto-increment ID for spectrogram titles
 
 // -------------------------------------------------------------------------
 // FFT HELPER FUNCTIONS
@@ -333,6 +351,149 @@ void ComputeFFTSpectrum(const std::vector<double>& signalData,
   }
 }
 
+// Compute spectrogram from signal data using Short-Time Fourier Transform (STFT)
+// Returns time bins, frequency bins, and 2D magnitude matrix (row-major: [time][freq])
+void ComputeSpectrogram(const std::vector<double>& signalData,
+                       const std::vector<double>& timePoints,
+                       int fftSize,
+                       int hopSize,
+                       bool useHanning,
+                       bool logScale,
+                       double timeWindowDuration,
+                       int maxFrequency,
+                       std::vector<double>& timeBins,
+                       std::vector<double>& freqBins,
+                       std::vector<double>& magnitudeMatrix) {
+
+  if (signalData.size() < (size_t)fftSize) {
+    // Not enough data
+    timeBins.clear();
+    freqBins.clear();
+    magnitudeMatrix.clear();
+    return;
+  }
+
+  // Calculate sampling frequency
+  double fs = CalculateSamplingFrequency(timePoints, 0, std::min(fftSize, (int)timePoints.size()));
+
+  // Determine how many samples to analyze based on time window
+  int numSamplesToAnalyze = signalData.size();
+  int dataStartIdx = 0;
+
+  if (timeWindowDuration > 0.0 && !timePoints.empty()) {
+    // Find the time range
+    double endTime = timePoints.back();
+    double startTime = endTime - timeWindowDuration;
+
+    // Find the start index for this time range
+    dataStartIdx = 0;
+    for (size_t i = 0; i < timePoints.size(); i++) {
+      if (timePoints[i] >= startTime) {
+        dataStartIdx = i;
+        break;
+      }
+    }
+    numSamplesToAnalyze = timePoints.size() - dataStartIdx;
+  } else {
+    // Use all data
+    dataStartIdx = 0;
+    numSamplesToAnalyze = signalData.size();
+  }
+
+  // Calculate number of FFT windows that fit in the data
+  int numWindows = 0;
+  if (numSamplesToAnalyze >= fftSize) {
+    numWindows = (numSamplesToAnalyze - fftSize) / hopSize + 1;
+  }
+
+  //printf("numWindows %d, numSampleToAnalyze %d\n", numWindows, numSamplesToAnalyze);
+
+  if (numWindows <= 0) {
+    timeBins.clear();
+    freqBins.clear();
+    magnitudeMatrix.clear();
+    return;
+  }
+
+  // Determine frequency bins
+  int numFreqBins = fftSize / 2;
+  double freqResolution = fs / fftSize;
+
+  // Apply max frequency limit if specified
+  int actualNumFreqBins = numFreqBins;
+  if (maxFrequency > 0 && maxFrequency < fs / 2.0) {
+    actualNumFreqBins = std::min(numFreqBins, (int)(maxFrequency / freqResolution));
+  }
+
+  // Ensure we have at least 1 frequency bin
+  if (actualNumFreqBins <= 0) {
+    actualNumFreqBins = 1;
+  }
+
+  // Initialize output arrays
+  timeBins.resize(numWindows);
+  freqBins.resize(actualNumFreqBins);
+  magnitudeMatrix.resize(numWindows * actualNumFreqBins);
+
+  // Fill frequency bins
+  for (int i = 0; i < actualNumFreqBins; i++) {
+    freqBins[i] = i * freqResolution;
+  }
+
+  // Process each FFT window
+  for (int windowIdx = 0; windowIdx < numWindows; windowIdx++) {
+    int startIdx = dataStartIdx + windowIdx * hopSize;
+
+    // Get the center time of this window
+    int centerIdx = startIdx + fftSize / 2;
+    if (centerIdx < (int)timePoints.size()) {
+      timeBins[windowIdx] = timePoints[centerIdx];
+    } else {
+      timeBins[windowIdx] = timePoints.back();
+    }
+
+    // Extract window data
+    std::vector<double> windowedData(fftSize);
+    for (int i = 0; i < fftSize; i++) {
+      if (startIdx + i < (int)signalData.size()) {
+        windowedData[i] = signalData[startIdx + i];
+      } else {
+        windowedData[i] = 0.0; // Zero-pad if needed
+      }
+    }
+
+    // Apply window function if requested
+    if (useHanning) {
+      ApplyHanningWindow(windowedData);
+    }
+
+    // Convert to complex and perform FFT
+    std::vector<Complex> fftData(fftSize);
+    for (int i = 0; i < fftSize; i++) {
+      fftData[i] = Complex(windowedData[i], 0.0);
+    }
+
+    FFT(fftData);
+
+    // Extract magnitude spectrum and store in matrix
+    for (int i = 0; i < actualNumFreqBins; i++) {
+      double mag = fftData[i].magnitude();
+
+      // Normalize by FFT size
+      mag = mag / fftSize;
+
+      // Convert to dB if requested
+      if (logScale) {
+        const double epsilon = 1e-10;
+        mag = 20.0 * log10(mag + epsilon);
+      }
+
+      // Store in row-major format: magnitudeMatrix[windowIdx * numFreqBins + freqIdx]
+      magnitudeMatrix[windowIdx * actualNumFreqBins + i] = mag;
+    }
+  }
+}
+
 // -------------------------------------------------------------------------
 // NETWORK THREAD
 // -------------------------------------------------------------------------
@@ -474,7 +635,7 @@ bool LoadLogFile(const std::string &filename) {
 // -------------------------------------------------------------------------
 // LAYOUT SAVE/LOAD
 // -------------------------------------------------------------------------
-bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots, const std::vector<ReadoutBox> &readouts, const std::vector<XYPlotWindow> &xyPlots, const std::vector<HistogramWindow> &histograms, const std::vector<FFTWindow> &ffts) {
+bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots, const std::vector<ReadoutBox> &readouts, const std::vector<XYPlotWindow> &xyPlots, const std::vector<HistogramWindow> &histograms, const std::vector<FFTWindow> &ffts, const std::vector<SpectrogramWindow> &spectrograms) {
   try {
     YAML::Emitter out;
     out << YAML::BeginMap;
@@ -545,6 +706,23 @@ bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plot
     }
     out << YAML::EndSeq;
 
+    // Save spectrograms
+    out << YAML::Key << "spectrograms" << YAML::Value << YAML::BeginSeq;
+    for (const auto &spectrogram : spectrograms) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << spectrogram.id;
+      out << YAML::Key << "title" << YAML::Value << spectrogram.title;
+      out << YAML::Key << "signal" << YAML::Value << spectrogram.signalName;
+      out << YAML::Key << "fftSize" << YAML::Value << spectrogram.fftSize;
+      out << YAML::Key << "hopSize" << YAML::Value << spectrogram.hopSize;
+      out << YAML::Key << "useHanning" << YAML::Value << spectrogram.useHanning;
+      out << YAML::Key << "logScale" << YAML::Value << spectrogram.logScale;
+      out << YAML::Key << "timeWindow" << YAML::Value << spectrogram.timeWindow;
+      out << YAML::Key << "maxFrequency" << YAML::Value << spectrogram.maxFrequency;
+      out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+
     out << YAML::EndMap;
 
     std::ofstream fout(filename);
@@ -567,7 +745,8 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
                 std::vector<ReadoutBox> &readouts, int &nextReadoutId,
                 std::vector<XYPlotWindow> &xyPlots, int &nextXYPlotId,
                 std::vector<HistogramWindow> &histograms, int &nextHistogramId,
-                std::vector<FFTWindow> &ffts, int &nextFFTId) {
+                std::vector<FFTWindow> &ffts, int &nextFFTId,
+                std::vector<SpectrogramWindow> &spectrograms, int &nextSpectrogramId) {
   try {
     YAML::Node config = YAML::LoadFile(filename);
     if (!config["plots"]) {
@@ -580,11 +759,13 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
     std::vector<XYPlotWindow> loadedXYPlots;
     std::vector<HistogramWindow> loadedHistograms;
     std::vector<FFTWindow> loadedFFTs;
+    std::vector<SpectrogramWindow> loadedSpectrograms;
     int maxPlotId = 0;
     int maxReadoutId = 0;
     int maxXYPlotId = 0;
     int maxHistogramId = 0;
     int maxFFTId = 0;
+    int maxSpectrogramId = 0;
 
     // Load plots
     for (const auto &plotNode : config["plots"]) {
@@ -676,16 +857,40 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
       }
     }
 
+    // Load spectrograms (if present)
+    if (config["spectrograms"]) {
+      for (const auto &spectrogramNode : config["spectrograms"]) {
+        SpectrogramWindow spectrogram;
+        spectrogram.id = spectrogramNode["id"].as<int>();
+        spectrogram.title = spectrogramNode["title"].as<std::string>();
+        spectrogram.signalName = spectrogramNode["signal"] ? spectrogramNode["signal"].as<std::string>() : "";
+        spectrogram.fftSize = spectrogramNode["fftSize"] ? spectrogramNode["fftSize"].as<int>() : 512;
+        spectrogram.hopSize = spectrogramNode["hopSize"] ? spectrogramNode["hopSize"].as<int>() : 128;
+        spectrogram.useHanning = spectrogramNode["useHanning"] ? spectrogramNode["useHanning"].as<bool>() : true;
+        spectrogram.logScale = spectrogramNode["logScale"] ? spectrogramNode["logScale"].as<bool>() : true;
+        spectrogram.timeWindow = spectrogramNode["timeWindow"] ? spectrogramNode["timeWindow"].as<double>() : 5.0;
+        spectrogram.maxFrequency = spectrogramNode["maxFrequency"] ? spectrogramNode["maxFrequency"].as<int>() : 0;
+        spectrogram.isOpen = true;
+
+        loadedSpectrograms.push_back(spectrogram);
+        if (spectrogram.id > maxSpectrogramId) {
+          maxSpectrogramId = spectrogram.id;
+        }
+      }
+    }
+
     plots = loadedPlots;
     readouts = loadedReadouts;
     xyPlots = loadedXYPlots;
     histograms = loadedHistograms;
     ffts = loadedFFTs;
+    spectrograms = loadedSpectrograms;
     nextPlotId = maxPlotId + 1;
     nextReadoutId = maxReadoutId + 1;
     nextXYPlotId = maxXYPlotId + 1;
     nextHistogramId = maxHistogramId + 1;
     nextFFTId = maxFFTId + 1;
+    nextSpectrogramId = maxSpectrogramId + 1;
     printf("Layout loaded from: %s\n", filename.c_str());
     return true;
   } catch (const std::exception &e) {
@@ -778,12 +983,15 @@ void NetworkReceiverThread() {
 
       // Process all available packets before sleeping
       while (dataAvailable && networkConnected) {
-        std::lock_guard<std::mutex> lock(stateMutex);
-        dataAvailable = udpSink->step();
+        {
+          std::lock_guard<std::mutex> lock(stateMutex);
+          dataAvailable = udpSink->step();
+        }
+        // Release the mutex between packets to allow UI thread to access data
       }
 
       // Sleep briefly after processing all available packets
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } else {
       // Not connected, sleep to avoid busy-waiting
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1032,6 +1240,13 @@ void MainLoopStep(void *arg) {
       newFFT.title = "FFT " + std::to_string(newFFT.id);
       newFFT.signalName = ""; // Empty initially
       activeFFTs.push_back(newFFT);
+    }
+    if (ImGui::MenuItem("Spectrogram")) {
+      SpectrogramWindow newSpectrogram;
+      newSpectrogram.id = nextSpectrogramId++;
+      newSpectrogram.title = "Spectrogram " + std::to_string(newSpectrogram.id);
+      newSpectrogram.signalName = ""; // Empty initially
+      activeSpectrograms.push_back(newSpectrogram);
     }
     ImGui::EndPopup();
   }
@@ -1654,6 +1869,208 @@ void MainLoopStep(void *arg) {
   }
 
   // ---------------------------------------------------------
+  // UI: SPECTROGRAMS
+  // ---------------------------------------------------------
+
+  // Loop through all active spectrograms
+  for (auto &spectrogram : activeSpectrograms) {
+    if (!spectrogram.isOpen)
+      continue;
+
+    // Set initial position below menu bar for new spectrograms
+    ImGui::SetNextWindowPos(ImVec2(350, menuBarHeight + 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(900, 600), ImGuiCond_FirstUseEver);
+
+    // Use a stable ID (based on spectrogram.id) while displaying dynamic title
+    std::string windowID = spectrogram.title + "##Spectrogram" + std::to_string(spectrogram.id);
+    ImGui::Begin(windowID.c_str(), &spectrogram.isOpen);
+
+    // Display content based on whether a signal is assigned
+    if (spectrogram.signalName.empty()) {
+      // Show drag-and-drop message
+      ImVec2 windowSize = ImGui::GetWindowSize();
+      const char* text = "Drag and drop a signal here";
+      ImVec2 textSize = ImGui::CalcTextSize(text);
+      ImGui::SetCursorPosX((windowSize.x - textSize.x) * 0.5f);
+      ImGui::SetCursorPosY((windowSize.y - textSize.y) * 0.5f);
+      ImGui::TextWrapped("%s", text);
+
+      // Accept drag-and-drop for the entire window
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+          std::string droppedName = (const char *)payload->Data;
+          spectrogram.signalName = droppedName;
+          spectrogram.title = droppedName + " Spectrogram";
+        }
+        ImGui::EndDragDropTarget();
+      }
+    } else {
+      // Display the spectrogram
+      if (signalRegistry.count(spectrogram.signalName)) {
+        Signal &sig = signalRegistry[spectrogram.signalName];
+
+        // Controls at the top
+        ImGui::Text("FFT Size:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        const char* fftSizeItems[] = { "128", "256", "512", "1024", "2048" };
+        int fftSizeIdx = 2; // Default to 512
+        if (spectrogram.fftSize == 128) fftSizeIdx = 0;
+        else if (spectrogram.fftSize == 256) fftSizeIdx = 1;
+        else if (spectrogram.fftSize == 512) fftSizeIdx = 2;
+        else if (spectrogram.fftSize == 1024) fftSizeIdx = 3;
+        else if (spectrogram.fftSize == 2048) fftSizeIdx = 4;
+
+        if (ImGui::Combo("##SpectFFTSize", &fftSizeIdx, fftSizeItems, IM_ARRAYSIZE(fftSizeItems))) {
+          spectrogram.fftSize = 1 << (fftSizeIdx + 7); // 2^(idx+7): 128, 256, 512, 1024, 2048
+          // Adjust hop size to be fftSize/4 for 75% overlap
+          spectrogram.hopSize = spectrogram.fftSize / 4;
+        }
+
+        ImGui::SameLine();
+        ImGui::Text("Time Window:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        float timeWindowFloat = (float)spectrogram.timeWindow;
+        if (ImGui::DragFloat("##TimeWindow", &timeWindowFloat, 0.1f, 0.5f, 60.0f, "%.1f s")) {
+          spectrogram.timeWindow = (double)timeWindowFloat;
+        }
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Hanning", &spectrogram.useHanning);
+
+        ImGui::SameLine();
+        ImGui::Checkbox("Log (dB)", &spectrogram.logScale);
+
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Signal")) {
+          spectrogram.signalName = "";
+          spectrogram.title = "Spectrogram " + std::to_string(spectrogram.id);
+        }
+
+        // Second row of controls
+        ImGui::Text("Max Frequency:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(150);
+        ImGui::DragInt("##MaxFreq", &spectrogram.maxFrequency, 10.0f, 0, 5000, spectrogram.maxFrequency == 0 ? "Auto" : "%d Hz");
+
+        if (!sig.dataY.empty()) {
+          // Collect data points based on mode
+          std::vector<double> dataToAnalyze;
+          std::vector<double> timeToAnalyze;
+
+          if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
+            // Offline mode: collect all data up to current time window end
+            double targetTime = offlineState.currentWindowStart + offlineState.windowWidth;
+            for (size_t i = 0; i < sig.dataX.size(); i++) {
+              if (sig.dataX[i] <= targetTime) {
+                timeToAnalyze.push_back(sig.dataX[i]);
+                dataToAnalyze.push_back(sig.dataY[i]);
+              } else {
+                break;
+              }
+            }
+          } else {
+            // Online mode: use all data in the circular buffer
+            if (sig.mode == PlaybackMode::ONLINE && sig.dataY.size() == sig.maxSize) {
+              // Buffer is full, use circular logic
+              for (size_t i = 0; i < sig.dataY.size(); i++) {
+                int idx = (sig.offset + i) % sig.dataY.size();
+                timeToAnalyze.push_back(sig.dataX[idx]);
+                dataToAnalyze.push_back(sig.dataY[idx]);
+              }
+            } else {
+              // Buffer not full yet, use all data
+              timeToAnalyze = sig.dataX;
+              dataToAnalyze = sig.dataY;
+            }
+          }
+
+          if (dataToAnalyze.size() >= (size_t)spectrogram.fftSize) {
+            // Compute spectrogram
+            std::vector<double> timeBins;
+            std::vector<double> freqBins;
+            std::vector<double> magnitudeMatrix;
+
+            ComputeSpectrogram(dataToAnalyze, timeToAnalyze, spectrogram.fftSize, spectrogram.hopSize,
+                              spectrogram.useHanning, spectrogram.logScale, spectrogram.timeWindow,
+                              spectrogram.maxFrequency, timeBins, freqBins, magnitudeMatrix);
+
+            printf("TimeBins: %d freq %d mag %d\n", timeBins.size(), freqBins.size(), magnitudeMatrix.size());
+
+            if (!timeBins.empty() && !freqBins.empty() && !magnitudeMatrix.empty()) {
+              // Calculate sampling frequency for display
+              double fs = CalculateSamplingFrequency(timeToAnalyze, std::max(0, (int)timeToAnalyze.size() - spectrogram.fftSize),
+                                                     std::min(spectrogram.fftSize, (int)timeToAnalyze.size()));
+
+              ImGui::Text("Sampling Freq: %.2f Hz | Time Bins: %zu | Freq Bins: %zu | Freq Res: %.3f Hz",
+                         fs, timeBins.size(), freqBins.size(), fs / spectrogram.fftSize);
+
+              // Plot the spectrogram as a heatmap
+              if (ImPlot::BeginPlot("##SpectrogramPlot", ImVec2(-1, -1))) {
+                const char* yAxisLabel = "Frequency (Hz)";
+                const char* zAxisLabel = spectrogram.logScale ? "Magnitude (dB)" : "Magnitude";
+                ImPlot::SetupAxes("Time (s)", yAxisLabel, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+
+                // Determine bounds for the heatmap
+                double timeMin = timeBins.front();
+                double timeMax = timeBins.back();
+                double freqMin = freqBins.front();
+                double freqMax = freqBins.back();
+
+                // ImPlot::PlotHeatmap expects data in column-major format, but we have row-major
+                // We need to transpose the data
+                int numTimeBins = timeBins.size();
+                int numFreqBins = freqBins.size();
+                std::vector<double> transposedMatrix(numTimeBins * numFreqBins);
+
+                for (int t = 0; t < numTimeBins; t++) {
+                  for (int f = 0; f < numFreqBins; f++) {
+                    // Transpose and flip frequency axis (so low freq at bottom, high at top)
+                    int srcIdx = t * numFreqBins + f;
+                    int dstIdx = (numFreqBins - 1 - f) * numTimeBins + t;
+                    transposedMatrix[dstIdx] = magnitudeMatrix[srcIdx];
+                  }
+                }
+
+                // Plot the heatmap
+                ImPlot::PlotHeatmap("##HeatmapData", transposedMatrix.data(),
+                                   numFreqBins, numTimeBins,
+                                   0.0, 0.0, // scale_min, scale_max (0 = auto)
+                                   nullptr,  // label_fmt
+                                   ImPlotPoint(timeMin, freqMin),
+                                   ImPlotPoint(timeMax, freqMax));
+
+                ImPlot::EndPlot();
+              }
+            } else {
+              ImGui::TextDisabled("Spectrogram computation failed");
+            }
+          } else {
+            ImGui::TextDisabled("Not enough data for spectrogram (need %d samples, have %zu)", spectrogram.fftSize, dataToAnalyze.size());
+          }
+        } else {
+          ImGui::TextDisabled("No data");
+        }
+      } else {
+        ImGui::TextDisabled("Signal not found");
+      }
+
+      // Accept drag-and-drop to change signal
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+          std::string droppedName = (const char *)payload->Data;
+          spectrogram.signalName = droppedName;
+          spectrogram.title = droppedName + " Spectrogram";
+        }
+        ImGui::EndDragDropTarget();
+      }
+    }
+
+    ImGui::End();
+  }
+
+  // ---------------------------------------------------------
   // UI: TIME SLIDER (Offline Mode Only)
   // ---------------------------------------------------------
   if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
@@ -1720,7 +2137,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("SaveLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      SaveLayout(filePathName, activePlots, activeReadoutBoxes, activeXYPlots, activeHistograms, activeFFTs);
+      SaveLayout(filePathName, activePlots, activeReadoutBoxes, activeXYPlots, activeHistograms, activeFFTs, activeSpectrograms);
     }
     ImGuiFileDialog::Instance()->Close();
   }
@@ -1729,7 +2146,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("OpenLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId, activeHistograms, nextHistogramId, activeFFTs, nextFFTId)) {
+      if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId, activeHistograms, nextHistogramId, activeFFTs, nextFFTId, activeSpectrograms, nextSpectrogramId)) {
         // Layout loaded successfully
       }
     }
