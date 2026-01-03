@@ -65,6 +65,10 @@ register_parser("legacy_binary", function(buffer, length)
             update_signal("IMU.gyroX", time, gyroX)
             update_signal("IMU.gyroY", time, gyroY)
             update_signal("IMU.gyroZ", time, gyroZ)
+
+            -- Trigger Tier 1 on_packet() callbacks for transforms
+            trigger_packet_callbacks("IMU")
+
             return true
         end
     end
@@ -83,6 +87,8 @@ register_parser("legacy_binary", function(buffer, length)
             update_signal("GPS.longitude", time, longitude)
             update_signal("GPS.altitude", time, altitude)
             update_signal("GPS.speed", time, speed)
+
+            trigger_packet_callbacks("GPS")
             return true
         end
     end
@@ -105,6 +111,8 @@ register_parser("legacy_binary", function(buffer, length)
             update_signal("Battery.percentage", time, percentage)
             update_signal("Battery.health", time, health)
             update_signal("Battery.cycleCount", time, cycleCount)
+
+            trigger_packet_callbacks("Battery")
             return true
         end
     end
@@ -127,6 +135,8 @@ register_parser("legacy_binary", function(buffer, length)
             update_signal("LIDAR.angleY", time, angleY)
             update_signal("LIDAR.quality", time, quality)
             update_signal("LIDAR.flags", time, flags)
+
+            trigger_packet_callbacks("LIDAR")
             return true
         end
     end
@@ -151,6 +161,8 @@ register_parser("legacy_binary", function(buffer, length)
             update_signal("RADAR.signalStrength", time, signalStrength)
             update_signal("RADAR.targetCount", time, targetCount)
             update_signal("RADAR.trackID", time, trackID)
+
+            trigger_packet_callbacks("RADAR")
             return true
         end
     end
@@ -175,6 +187,8 @@ register_parser("legacy_binary", function(buffer, length)
             update_signal("State.uptime", time, uptime)
             update_signal("State.cpuUsage", time, cpuUsage)
             update_signal("State.memoryUsage", time, memoryUsage)
+
+            trigger_packet_callbacks("State")
             return true
         end
     end
@@ -199,6 +213,8 @@ register_parser("legacy_binary", function(buffer, length)
             update_signal("Debug.value1", time, value1)
             update_signal("Debug.value2", time, value2)
             update_signal("Debug.metric", time, metric)
+
+            trigger_packet_callbacks("Debug")
             return true
         end
     end
@@ -223,6 +239,8 @@ register_parser("legacy_binary", function(buffer, length)
             update_signal("Motor.throttle", time, throttle)
             update_signal("Motor.faults", time, faults)
             update_signal("Motor.totalRotations", time, totalRotations)
+
+            trigger_packet_callbacks("Motor")
             return true
         end
     end

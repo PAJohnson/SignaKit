@@ -136,6 +136,37 @@ update_signal("GPS.latitude", time, 37.7749)     -- Create if doesn't exist
 
 ---
 
+### Tier 1 Integration Function
+
+```lua
+-- Trigger Tier 1 on_packet() callbacks for transforms
+trigger_packet_callbacks(packetType)
+```
+
+**Purpose:** After parsing a packet and updating signals, call this to execute any Tier 1 transform callbacks registered with `on_packet()`. This ensures backward compatibility with existing transform scripts.
+
+**Parameters:**
+- `packetType` (string): Packet type identifier (e.g., "IMU", "GPS", "Battery")
+
+**Example:**
+```lua
+register_parser("my_parser", function(buffer, length)
+    -- Parse packet and update signals
+    local time = readDouble(buffer, 4, true)
+    local value = readFloat(buffer, 12, true)
+    update_signal("MyData.value", time, value)
+
+    -- Trigger any on_packet("MyData", ...) transform callbacks
+    trigger_packet_callbacks("MyData")
+
+    return true
+end)
+```
+
+**When to use:** Call this at the end of your parser (after updating all signals) if you want Tier 1 transforms to run. The `legacy_binary.lua` parser calls this for all packet types to maintain full backward compatibility.
+
+---
+
 ### Parser Registration
 
 ```lua
@@ -541,6 +572,7 @@ scripts/parsers/
 | `bytesToHex(buf, off, len)` | Hex dump for debugging | `string` or `nil` |
 | `update_signal(name, time, val)` | Update signal | `void` |
 | `create_signal(name)` | Pre-create signal | `void` |
+| `trigger_packet_callbacks(type)` | Trigger Tier 1 transforms | `void` |
 | `register_parser(name, func)` | Register parser | `void` |
 
 ---
@@ -557,6 +589,12 @@ scripts/parsers/
 - Verify `update_signal()` is being called
 - Check signal names match your expectations
 - Look for nil values from read functions
+
+### Tier 1 Transforms Not Running
+- Ensure your parser calls `trigger_packet_callbacks(packetType)` after updating signals
+- Verify the packet type string matches what's used in `on_packet()` callbacks
+- Check that Tier 1 transform scripts are loaded (look for registration messages in console)
+- The `legacy_binary.lua` parser includes these calls for all packet types
 
 ### Performance Issues
 - Profile with `log()` and timestamps

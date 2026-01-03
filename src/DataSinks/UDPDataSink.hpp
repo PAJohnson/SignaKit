@@ -126,30 +126,30 @@ public:
             parsedByLua = luaManager->parsePacket(buffer, len, signalRegistry);
         }
 
-        // Fall back to legacy C++ parsing if no Lua parser handled it
-        if (!parsedByLua && !packets.empty()) {
-            // Find matching packet by header string
-            for (const PacketDefinition& pkt : packets) {
-                if (strncmp(buffer, pkt.headerString.c_str(),
-                            pkt.headerString.length()) == 0) {
+        // // Fall back to legacy C++ parsing if no Lua parser handled it
+        // if (!parsedByLua && !packets.empty()) {
+        //     // Find matching packet by header string
+        //     for (const PacketDefinition& pkt : packets) {
+        //         if (strncmp(buffer, pkt.headerString.c_str(),
+        //                     pkt.headerString.length()) == 0) {
 
-                    // Matched packet! Process all signals in this packet
-                    for (const auto &sig : pkt.signals) {
-                        double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
-                        double v = ReadValue(buffer, sig.type, sig.offset);
-                        signalRegistry[sig.key].AddPoint(t, v);
-                    }
+        //             // Matched packet! Process all signals in this packet
+        //             for (const auto &sig : pkt.signals) {
+        //                 double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
+        //                 double v = ReadValue(buffer, sig.type, sig.offset);
+        //                 signalRegistry[sig.key].AddPoint(t, v);
+        //             }
 
-                    // Invoke Lua callback if registered (Tier 1 feature - deprecated in Tier 2)
-                    if (packetCallback) {
-                        packetCallback(pkt.id);
-                    }
+        //             // Invoke Lua callback if registered (Tier 1 feature - deprecated in Tier 2)
+        //             if (packetCallback) {
+        //                 packetCallback(pkt.id);
+        //             }
 
-                    // Break after finding the matching packet type
-                    break;
-                }
-            }
-        }
+        //             // Break after finding the matching packet type
+        //             break;
+        //         }
+        //     }
+        // }
 
         return true;
     }

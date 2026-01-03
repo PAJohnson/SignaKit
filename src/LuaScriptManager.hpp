@@ -53,6 +53,14 @@ public:
             registerPacketParser(parserName, func);
         });
 
+        // Expose function to trigger Tier 1 packet callbacks from Tier 2 parsers
+        // trigger_packet_callbacks(packetType) - triggers all on_packet() callbacks for a packet type
+        lua.set_function("trigger_packet_callbacks", [this](const std::string& packetType) {
+            if (currentSignalRegistry != nullptr) {
+                executePacketCallbacks(packetType, *currentSignalRegistry);
+            }
+        });
+
         // Expose logging API
         lua.set_function("log", [](const std::string& message) {
             printf("[Lua] %s\n", message.c_str());
