@@ -1,6 +1,7 @@
-- Add offline mode. Want to be able to open a telemetry log (such as what this program dumps while running) and "Scroll" through it
-- Come up with hooks for serial port data ingestion and other sources like CAN (refactoring network thread into a DataParser class and interface)
-    - Call the class DataSink. Give it three methods - Open, Close, and Step. Provide it with a reference to the signal map (and whatever else is required) so that it can do what it needs to do.
+- More plot types
+    - A histogram could be useful. It would need to update based on all of that data that has been accrued to this point in time (useful for seeing statistics of things)
+    - FFT, because why not? Sounds super useful, and a great demo for doing things live to demonstrate the power of C++
+    - Spectrogram. Utilize the FFT stuff from before, and plot it as a heatmap spectrogram.
 - Lua embedding - this interface should support two (or three) usage types. 
     - Calculating new data based on packets. Idea is to have a lua callback run on receipt of specific packet, register a new signal in the signal map, and calculate it based on data available from the signal map. This will support whatever math can be programmed in lua
     - Lua will be used for the logic of the control elements in  GUI (to be added). Right now, it would need to support button callbacks and text input boxes. The Text input elements and buttons should be a generic element that can be instantiated by an "init" method in the lua script. For example, there might be a button for "Send Config", and three text inputs with labels for "heading", "mode", and "target". The user can type in the config boxes, and when the Send Config button is clicked, a lua callback will fire that has access to all of the data the gui provides (in this case, the contents of the dynamically defined text boxes).

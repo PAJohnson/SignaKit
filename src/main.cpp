@@ -24,6 +24,7 @@
 
 // Network Includes
 #include "SignalConfigLoader.h"
+#include "DataSinks/UDPDataSink.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -32,69 +33,13 @@
 #include <windows.h>
 #include <ShellScalingApi.h>
 
-// telemetry_defs.h removed as we now use dynamic loading.
+#include "types.hpp"
 
 #define UDP_PORT 5000
 
 // -------------------------------------------------------------------------
 // DATA STRUCTURES
 // -------------------------------------------------------------------------
-
-// Playback mode enum
-enum class PlaybackMode {
-  ONLINE,   // Real-time from network
-  OFFLINE   // File playback
-};
-
-// A single signal (e.g., "IMU.AccelX") holding its own history
-struct Signal {
-  std::string name;
-  int offset;
-  std::vector<double> dataX; // Time
-  std::vector<double> dataY; // Value
-  int maxSize;
-  PlaybackMode mode;
-
-  Signal(std::string n = "", int size = 2000, PlaybackMode m = PlaybackMode::ONLINE)
-      : name(n), maxSize(size), offset(0), mode(m) {
-    if (mode == PlaybackMode::ONLINE) {
-      dataX.reserve(maxSize);
-      dataY.reserve(maxSize);
-    }
-  }
-
-  void AddPoint(double x, double y) {
-    if (mode == PlaybackMode::ONLINE) {
-      // Online mode: circular buffer with fixed size
-      if (dataX.size() < maxSize) {
-        dataX.push_back(x);
-        dataY.push_back(y);
-      } else {
-        dataX[offset] = x;
-        dataY[offset] = y;
-        offset = (offset + 1) % maxSize;
-      }
-    } else {
-      // Offline mode: grow indefinitely
-      dataX.push_back(x);
-      dataY.push_back(y);
-    }
-  }
-
-  void Clear() {
-    dataX.clear();
-    dataY.clear();
-    offset = 0;
-  }
-
-  void SetMode(PlaybackMode m) {
-    mode = m;
-    if (mode == PlaybackMode::ONLINE && dataX.capacity() < maxSize) {
-      dataX.reserve(maxSize);
-      dataY.reserve(maxSize);
-    }
-  }
-};
 
 // Represents one Plot Panel on the right side
 struct PlotWindow {
@@ -197,91 +142,7 @@ std::string GenerateLogFilename() {
   return oss.str();
 }
 
-// Helper to read a value from the buffer based on type
-// Supports all stdint.h types plus legacy C types for backwards compatibility
-// All values are cast to double for storage in the signal buffers
-double ReadValue(const char *buffer, const std::string &type, int offset) {
-  // Floating point types
-  if (type == "double") {
-    double val;
-    memcpy(&val, buffer + offset, sizeof(double));
-    return val;
-  } else if (type == "float") {
-    float val;
-    memcpy(&val, buffer + offset, sizeof(float));
-    return (double)val;
-  }
-  // Signed integer types
-  else if (type == "int8_t" || type == "int8") {
-    int8_t val;
-    memcpy(&val, buffer + offset, sizeof(int8_t));
-    return (double)val;
-  } else if (type == "int16_t" || type == "int16") {
-    int16_t val;
-    memcpy(&val, buffer + offset, sizeof(int16_t));
-    return (double)val;
-  } else if (type == "int32_t" || type == "int32" || type == "int") {
-    int32_t val;
-    memcpy(&val, buffer + offset, sizeof(int32_t));
-    return (double)val;
-  } else if (type == "int64_t" || type == "int64") {
-    int64_t val;
-    memcpy(&val, buffer + offset, sizeof(int64_t));
-    return (double)val;
-  }
-  // Unsigned integer types
-  else if (type == "uint8_t" || type == "uint8") {
-    uint8_t val;
-    memcpy(&val, buffer + offset, sizeof(uint8_t));
-    return (double)val;
-  } else if (type == "uint16_t" || type == "uint16") {
-    uint16_t val;
-    memcpy(&val, buffer + offset, sizeof(uint16_t));
-    return (double)val;
-  } else if (type == "uint32_t" || type == "uint32") {
-    uint32_t val;
-    memcpy(&val, buffer + offset, sizeof(uint32_t));
-    return (double)val;
-  } else if (type == "uint64_t" || type == "uint64") {
-    uint64_t val;
-    memcpy(&val, buffer + offset, sizeof(uint64_t));
-    return (double)val;
-  }
-  // Standard C types (for backwards compatibility)
-  else if (type == "char") {
-    char val;
-    memcpy(&val, buffer + offset, sizeof(char));
-    return (double)val;
-  } else if (type == "short") {
-    short val;
-    memcpy(&val, buffer + offset, sizeof(short));
-    return (double)val;
-  } else if (type == "long") {
-    long val;
-    memcpy(&val, buffer + offset, sizeof(long));
-    return (double)val;
-  } else if (type == "unsigned char") {
-    unsigned char val;
-    memcpy(&val, buffer + offset, sizeof(unsigned char));
-    return (double)val;
-  } else if (type == "unsigned short") {
-    unsigned short val;
-    memcpy(&val, buffer + offset, sizeof(unsigned short));
-    return (double)val;
-  } else if (type == "unsigned int") {
-    unsigned int val;
-    memcpy(&val, buffer + offset, sizeof(unsigned int));
-    return (double)val;
-  } else if (type == "unsigned long") {
-    unsigned long val;
-    memcpy(&val, buffer + offset, sizeof(unsigned long));
-    return (double)val;
-  }
-
-  // Unknown type - return 0 and warn
-  fprintf(stderr, "Warning: Unknown field type '%s'\n", type.c_str());
-  return 0.0;
-}
+// Note: ReadValue function moved to UDPDataSink.hpp
 
 // Helper to load a binary log file and populate signal registry
 bool LoadLogFile(const std::string &filename) {
@@ -566,8 +427,8 @@ void NetworkReceiverThread() {
     }
   }
 
-  SOCKET sockfd = INVALID_SOCKET;
-  char buffer[1024];
+  // Create UDPDataSink (initially with placeholder connection params)
+  UDPDataSink* udpSink = nullptr;
 
   while (appRunning) {
     // Check if we should connect
@@ -581,64 +442,39 @@ void NetworkReceiverThread() {
         port = networkPort;
       }
 
-      // Create socket
-      sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-      if (sockfd == INVALID_SOCKET) {
-        printf("Failed to create socket\n");
-        networkShouldConnect = false;
-        continue;
-      }
+      // Create new UDP data sink with current connection params
+      udpSink = new UDPDataSink(signalRegistry, packets, ip, port, &logFile, &logFileMutex);
 
-      // Set socket to non-blocking mode
-      u_long mode = 1;
-      ioctlsocket(sockfd, FIONBIO, &mode);
+      if (udpSink->open()) {
+        networkConnected = true;
 
-      // Setup address
-      sockaddr_in servaddr;
-      memset(&servaddr, 0, sizeof(servaddr));
-      servaddr.sin_family = AF_INET;
-      servaddr.sin_port = htons(port);
-
-      // Convert IP address
-      if (ip == "localhost" || ip == "127.0.0.1") {
-        servaddr.sin_addr.s_addr = INADDR_ANY;
-      } else {
-        inet_pton(AF_INET, ip.c_str(), &servaddr.sin_addr);
-      }
-
-      // Bind socket
-      if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-        printf("Failed to bind socket to %s:%d\n", ip.c_str(), port);
-        closesocket(sockfd);
-        sockfd = INVALID_SOCKET;
-        networkShouldConnect = false;
-        continue;
-      }
-
-      networkConnected = true;
-      printf("Connected to %s:%d\n", ip.c_str(), port);
-
-      // Open log file
-      {
-        std::lock_guard<std::mutex> lock(logFileMutex);
-        std::string filename = GenerateLogFilename();
-        logFile.open(filename, std::ios::binary);
-        if (logFile.is_open()) {
-          printf("Logging to file: %s\n", filename.c_str());
-        } else {
-          printf("Failed to open log file: %s\n", filename.c_str());
+        // Open log file
+        {
+          std::lock_guard<std::mutex> lock(logFileMutex);
+          std::string filename = GenerateLogFilename();
+          logFile.open(filename, std::ios::binary);
+          if (logFile.is_open()) {
+            printf("Logging to file: %s\n", filename.c_str());
+          } else {
+            printf("Failed to open log file: %s\n", filename.c_str());
+          }
         }
+      } else {
+        // Failed to connect
+        delete udpSink;
+        udpSink = nullptr;
+        networkShouldConnect = false;
       }
     }
 
     // Check if we should disconnect
     if (!networkShouldConnect && networkConnected) {
-      if (sockfd != INVALID_SOCKET) {
-        closesocket(sockfd);
-        sockfd = INVALID_SOCKET;
+      if (udpSink) {
+        udpSink->close();
+        delete udpSink;
+        udpSink = nullptr;
       }
       networkConnected = false;
-      printf("Disconnected\n");
 
       // Close log file
       {
@@ -651,56 +487,13 @@ void NetworkReceiverThread() {
     }
 
     // Receive data if connected
-    if (networkConnected) {
+    if (networkConnected && udpSink) {
       bool dataAvailable = true;
 
       // Process all available packets before sleeping
       while (dataAvailable && networkConnected) {
-        int len = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
-        if (len == SOCKET_ERROR) {
-          int error = WSAGetLastError();
-          if (error == WSAEWOULDBLOCK) {
-            // No more data available
-            dataAvailable = false;
-          } else {
-            // Real error occurred
-            printf("Socket error: %d\n", error);
-            dataAvailable = false;
-          }
-          break;
-        }
-
-        if (len > 0) {
-          // Log raw packet to file
-          {
-            std::lock_guard<std::mutex> lock(logFileMutex);
-            if (logFile.is_open()) {
-              logFile.write(buffer, len);
-            }
-          }
-
-          std::lock_guard<std::mutex> lock(stateMutex);
-
-          // Find matching packet by header string
-          for (const PacketDefinition& pkt : packets) {
-            if (strncmp(buffer, pkt.headerString.c_str(),
-                        pkt.headerString.length()) == 0) {
-
-              // Matched packet! Process all signals in this packet
-              for (const auto &sig : pkt.signals) {
-                double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
-                double v = ReadValue(buffer, sig.type, sig.offset);
-                signalRegistry[sig.key].AddPoint(t, v);
-              }
-
-              // Break after finding the matching packet type
-              break;
-            }
-          }
-        } else {
-          // len == 0, connection closed
-          dataAvailable = false;
-        }
+        std::lock_guard<std::mutex> lock(stateMutex);
+        dataAvailable = udpSink->step();
       }
 
       // Sleep briefly after processing all available packets
@@ -712,8 +505,9 @@ void NetworkReceiverThread() {
   }
 
   // Cleanup on exit
-  if (sockfd != INVALID_SOCKET) {
-    closesocket(sockfd);
+  if (udpSink) {
+    udpSink->close();
+    delete udpSink;
   }
 }
 
