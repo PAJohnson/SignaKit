@@ -1,8 +1,37 @@
-- More plot types
-    - A histogram could be useful. It would need to update based on all of that data that has been accrued to this point in time (useful for seeing statistics of things)
-    - FFT, because why not? Sounds super useful, and a great demo for doing things live to demonstrate the power of C++
-    - Spectrogram. Utilize the FFT stuff from before, and plot it as a heatmap spectrogram.
-- Lua embedding - this interface should support two (or three) usage types. 
-    - Calculating new data based on packets. Idea is to have a lua callback run on receipt of specific packet, register a new signal in the signal map, and calculate it based on data available from the signal map. This will support whatever math can be programmed in lua
-    - Lua will be used for the logic of the control elements in  GUI (to be added). Right now, it would need to support button callbacks and text input boxes. The Text input elements and buttons should be a generic element that can be instantiated by an "init" method in the lua script. For example, there might be a button for "Send Config", and three text inputs with labels for "heading", "mode", and "target". The user can type in the config boxes, and when the Send Config button is clicked, a lua callback will fire that has access to all of the data the gui provides (in this case, the contents of the dynamically defined text boxes).
-    - Timers! This is to support things like Heartbeat (keep-alive) signals that an embedded device might require. It should be possible to register a timer (either one-shot or cyclic) in the lua script file, as well as a lua callback that gets called when the timer fires. This should also have access to the state variables of the gui, like the data provided in text boxes (thinking of the COM port to send data over or the IP/port to send a network packet).
+## Lua Scripting
+
+### ✅ COMPLETED: Tier 1 - Signal Transforms (2026-01-02)
+- ✅ Integrated sol2 library for C++/Lua bindings
+- ✅ Created LuaScriptManager for script lifecycle management
+- ✅ Implemented signal transform system - Lua scripts can create derived signals from existing telemetry
+- ✅ Auto-load scripts from `scripts/` directory at startup
+- ✅ GUI controls for loading/reloading scripts with hot-reload support
+- ✅ Exposed signal access API: `get_signal()`, `get_signal_history()`, `signal_exists()`
+- ✅ Transform registration API: `register_transform(name, function)`
+- ✅ Created example scripts: vector magnitude, unit conversion, filtering, power calculation
+- ✅ Full documentation in `docs/LuaScripting.md` and `scripts/README.md`
+- ✅ Error handling and display in Scripts menu
+
+**Status**: Tier 1 implementation complete and production-ready!
+
+See `docs/LuaScripting.md` for complete API reference and examples.
+
+### 🔄 TODO: Tier 2 - Frame Callbacks & Monitoring
+- Frame-based callbacks (execute every GUI render frame)
+- Event-based alerting when signals meet conditions
+- Statistics accumulation and custom logging
+- Access to GUI state and user inputs
+
+### 🔄 TODO: Tier 3 - GUI Control Elements
+- Dynamic UI element creation from Lua
+- Button callbacks with custom actions
+- Text input boxes for configuration
+- Access to text box contents from Lua callbacks
+- Support for "Send Config" style workflows
+- Network/serial packet transmission from Lua
+
+### 🔄 TODO: Tier 4 - Timers & Async Operations
+- Timer registration (one-shot and cyclic)
+- Heartbeat/keep-alive signal support
+- Timer callbacks with access to GUI state
+- Integration with network transmission for periodic packets

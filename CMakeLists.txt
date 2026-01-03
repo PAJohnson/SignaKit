@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 project(TelemetryGui)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -75,6 +75,34 @@ if(NOT imguifiledialog_POPULATED)
 endif()
 set(IMGUIFILEDIALOG_DIR ${imguifiledialog_SOURCE_DIR})
 
+# Find LuaJIT (preferred for performance) or fall back to Lua
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(LUAJIT luajit)
+endif()
+
+if(LUAJIT_FOUND)
+    message(STATUS "Using LuaJIT: ${LUAJIT_LIBRARIES}")
+    set(LUA_LIBRARIES ${LUAJIT_LIBRARIES})
+    set(LUA_INCLUDE_DIR ${LUAJIT_INCLUDE_DIRS})
+else()
+    # Fall back to standard Lua
+    find_package(Lua 5.1 REQUIRED)
+    message(STATUS "Using Lua: ${LUA_LIBRARIES}")
+    set(LUA_INCLUDE_DIR ${LUA_INCLUDE_DIR})
+endif()
+
+message(STATUS "Lua include dir: ${LUA_INCLUDE_DIR}")
+
+# Fetch sol2 (C++ Lua bindings)
+# Using develop branch for better compiler compatibility and LuaJIT support
+FetchContent_Declare(
+  sol2
+  GIT_REPOSITORY https://github.com/ThePhD/sol2.git
+  GIT_TAG develop
+)
+FetchContent_MakeAvailable(sol2)
+
 # ImGui Sources
 set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui.cpp
@@ -114,6 +142,7 @@ target_include_directories(telemetry_gui PRIVATE
     ${IMPLOT_DIR}
     ${IMGUIFILEDIALOG_DIR}
     ${SDL2_INCLUDE_DIRS}
+    ${LUA_INCLUDE_DIR}
     src
 )
 
@@ -125,6 +154,9 @@ add_custom_command(TARGET telemetry_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/signals.yaml
         ${CMAKE_CURRENT_BINARY_DIR}/signals.yaml
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/scripts
+        ${CMAKE_CURRENT_BINARY_DIR}/scripts
 )
 
 # Link libraries - Windows only
@@ -139,6 +171,8 @@ target_link_libraries(telemetry_gui PRIVATE
     gdi32
     shcore
     yaml-cpp
+    sol2::sol2
+    ${LUA_LIBRARIES}
 )
 
 # Static linking for portability

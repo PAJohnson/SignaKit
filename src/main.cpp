@@ -39,6 +39,7 @@
 #include <ShellScalingApi.h>
 
 #include "types.hpp"
+#include "LuaScriptManager.hpp"
 
 #define UDP_PORT 5000
 
@@ -156,6 +157,9 @@ struct OfflinePlaybackState {
 
 // The Registry: Maps a string ID to the actual data buffer
 std::map<std::string, Signal> signalRegistry;
+
+// Lua Script Manager
+LuaScriptManager luaScriptManager;
 
 // The Layout: List of active plot windows
 std::vector<PlotWindow> activePlots;
@@ -1125,6 +1129,13 @@ void NetworkReceiverThread() {
         {
           std::lock_guard<std::mutex> lock(stateMutex);
           dataAvailable = udpSink->step();
+
+          // Execute Lua transforms after processing packet(s)
+          // Do this while we still hold the mutex to ensure consistency
+          if (!dataAvailable) {
+            // No more packets in this burst - execute transforms with latest data
+            luaScriptManager.executeTransforms(signalRegistry);
+          }
         }
         // Release the mutex between packets to allow UI thread to access data
       }
@@ -1233,6 +1244,40 @@ void MainLoopStep(void *arg) {
       if (ImGui::MenuItem("Close")) {
         appRunning = false;
       }
+      ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Scripts")) {
+      if (ImGui::MenuItem("Reload All Scripts")) {
+        luaScriptManager.reloadAllScripts();
+      }
+      if (ImGui::MenuItem("Load Script...")) {
+        IGFD::FileDialogConfig config;
+        config.path = "scripts";
+        ImGuiFileDialog::Instance()->OpenDialog("LoadScriptDlg", "Load Lua Script", ".lua", config);
+      }
+      ImGui::Separator();
+
+      // List loaded scripts
+      const auto& scripts = luaScriptManager.getScripts();
+      if (scripts.empty()) {
+        ImGui::TextDisabled("No scripts loaded");
+      } else {
+        for (const auto& script : scripts) {
+          bool enabled = script.enabled;
+          if (ImGui::MenuItem(script.name.c_str(), nullptr, &enabled)) {
+            luaScriptManager.setScriptEnabled(script.name, enabled);
+          }
+          if (script.hasError) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ERROR");
+            if (ImGui::IsItemHovered()) {
+              ImGui::SetTooltip("%s", script.lastError.c_str());
+            }
+          }
+        }
+      }
+
       ImGui::EndMenu();
     }
 
@@ -2372,6 +2417,15 @@ void MainLoopStep(void *arg) {
     ImGuiFileDialog::Instance()->Close();
   }
 
+  // Display Load Script dialog
+  if (ImGuiFileDialog::Instance()->Display("LoadScriptDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
+    if (ImGuiFileDialog::Instance()->IsOk()) {
+      std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
+      luaScriptManager.loadScript(filePathName);
+    }
+    ImGuiFileDialog::Instance()->Close();
+  }
+
   // ---------------------------------------------------------
   // CLEANUP PHASE (The "Erase-Remove Idiom")
   // ---------------------------------------------------------
@@ -2480,6 +2534,10 @@ int main(int, char **) {
   GlobalContext ctx;
   ctx.window = window;
   ctx.gl_context = gl_context;
+
+  // Load Lua scripts from scripts/ directory
+  printf("Loading Lua scripts...\n");
+  luaScriptManager.loadScriptsFromDirectory("scripts");
 
   std::thread receiver(NetworkReceiverThread);
   SDL_Event event;
