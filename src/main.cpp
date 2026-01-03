@@ -991,7 +991,7 @@ void NetworkReceiverThread() {
       }
 
       // Sleep briefly after processing all available packets
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     } else {
       // Not connected, sleep to avoid busy-waiting
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1995,8 +1995,6 @@ void MainLoopStep(void *arg) {
             ComputeSpectrogram(dataToAnalyze, timeToAnalyze, spectrogram.fftSize, spectrogram.hopSize,
                               spectrogram.useHanning, spectrogram.logScale, spectrogram.timeWindow,
                               spectrogram.maxFrequency, timeBins, freqBins, magnitudeMatrix);
-
-            printf("TimeBins: %d freq %d mag %d\n", timeBins.size(), freqBins.size(), magnitudeMatrix.size());
 
             if (!timeBins.empty() && !freqBins.empty() && !magnitudeMatrix.empty()) {
               // Calculate sampling frequency for display

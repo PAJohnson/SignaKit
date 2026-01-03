@@ -37,28 +37,62 @@ void imu_thread_func(int sockfd, sockaddr_in dest_addr) {
 #endif
     IMUData packet;
     // Ensure header is set (in case of compiler quirks)
-    memcpy(packet.header, "IMU", 4); 
+    memcpy(packet.header, "IMU", 4);
 
-    std::cout << "[IMU] Thread started (100Hz)..." << std::endl;
+    std::cout << "[IMU] Thread started (200Hz with burst sending to work around Windows timer resolution)..." << std::endl;
+
+    using namespace std::chrono;
+    const double TARGET_RATE = 200.0; // 200Hz = 5ms period
+    const double PERIOD = 1.0 / TARGET_RATE;
+    const int SLEEP_MS = 20; // Sleep for 20ms (within Windows timer resolution)
+
+    double lastBurstTime = get_time();
+    int packetSequence = 0;
 
     while (running) {
-        double t = get_time();
-        
-        packet.time = t;
-        // Generate interesting waveform data
-        packet.accelX = (float)sin(2.0 * 3.14159 * 5 * t) + (float)sin(2.0 * 3.14159 * 25 * t);
-        packet.accelY = (float)cos(t);
-        packet.accelZ = (float)(sin(t * 0.5) * 2.0f);
-        
-        packet.gyroX = (float)((double)rand() / RAND_MAX); // Noise
-        packet.gyroY = 0.0f;
-        packet.gyroZ = 0.0f;
+        auto burstStart = steady_clock::now();
+        double currentTime = get_time();
 
-        sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
-               (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+        // Calculate how many packets we should have sent since last burst
+        double timeSinceLastBurst = currentTime - lastBurstTime;
+        int packetsToSend = (int)(timeSinceLastBurst * TARGET_RATE);
 
-        // ~500Hz
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        // Clamp to reasonable burst size (avoid huge bursts if we fall behind)
+        if (packetsToSend > 20) packetsToSend = 20;
+        if (packetsToSend < 1) packetsToSend = 1;
+
+        // Generate and send packets with timestamps evenly spaced over the elapsed period
+        for (int i = 0; i < packetsToSend; i++) {
+            // Calculate timestamp for this packet (evenly distributed over the time period)
+            double t = lastBurstTime + (i + 1) * (timeSinceLastBurst / packetsToSend);
+            packet.time = t;
+
+            // Generate interesting waveform data
+            packet.accelX = (float)sin(2.0 * 3.14159 * 5 * t) + (float)sin(2.0 * 3.14159 * 25 * t);
+            packet.accelY = (float)cos(t);
+            packet.accelZ = (float)(sin(t * 0.5) * 2.0f);
+
+            packet.gyroX = (float)((double)rand() / RAND_MAX); // Noise
+            packet.gyroY = 0.0f;
+            packet.gyroZ = 0.0f;
+
+            sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
+                   (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+
+            packetSequence++;
+        }
+
+        // Update last burst time to current time
+        lastBurstTime = currentTime;
+
+        // Sleep for the remainder of the burst period
+        auto burstEnd = steady_clock::now();
+        auto burstDuration = duration_cast<milliseconds>(burstEnd - burstStart);
+        auto sleepTime = milliseconds(SLEEP_MS) - burstDuration;
+
+        if (sleepTime.count() > 0) {
+            std::this_thread::sleep_for(sleepTime);
+        }
     }
 }
 
