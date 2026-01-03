@@ -42,8 +42,11 @@
 #include "LuaScriptManager.hpp"
 #include "plot_types.hpp"
 #include "signal_processing.hpp"
+#include "ui_state.hpp"
 
 #define UDP_PORT 5000
+
+// Note: plot_rendering.hpp is included later, after global state definitions
 
 // -------------------------------------------------------------------------
 // GLOBAL STATE
@@ -81,437 +84,18 @@ std::map<std::string, Signal> signalRegistry;
 // Lua Script Manager
 LuaScriptManager luaScriptManager;
 
-// The Layout: List of active plot windows
-std::vector<PlotWindow> activePlots;
-int nextPlotId = 1; // Auto-increment ID for window titles
+// UI plot state (consolidates all plot window vectors and ID counters)
+UIPlotState uiPlotState;
 
-// Readout boxes
-std::vector<ReadoutBox> activeReadoutBoxes;
-int nextReadoutBoxId = 1; // Auto-increment ID for readout box titles
+// Include layout persistence functions (must come after OfflinePlaybackState definition)
+#include "layout_persistence.hpp"
 
-// X/Y plots
-std::vector<XYPlotWindow> activeXYPlots;
-int nextXYPlotId = 1; // Auto-increment ID for X/Y plot titles
-
-// Histograms
-std::vector<HistogramWindow> activeHistograms;
-int nextHistogramId = 1; // Auto-increment ID for histogram titles
-
-// FFT plots
-std::vector<FFTWindow> activeFFTs;
-int nextFFTId = 1; // Auto-increment ID for FFT titles
-
-// Spectrogram plots
-std::vector<SpectrogramWindow> activeSpectrograms;
-int nextSpectrogramId = 1; // Auto-increment ID for spectrogram titles
+// Include plot rendering functions (must come after all global state definitions)
+#include "plot_rendering.hpp"
 
 // -------------------------------------------------------------------------
 // NETWORK THREAD
 // -------------------------------------------------------------------------
-// Helper to generate timestamped filename
-std::string GenerateLogFilename() {
-  auto now = std::chrono::system_clock::now();
-  auto time_t_now = std::chrono::system_clock::to_time_t(now);
-  std::tm tm_utc;
-  gmtime_s(&tm_utc, &time_t_now);
-
-  std::ostringstream oss;
-  oss << std::setfill('0')
-      << std::setw(2) << (tm_utc.tm_mon + 1)
-      << std::setw(2) << tm_utc.tm_mday
-      << std::setw(4) << (tm_utc.tm_year + 1900)
-      << "_"
-      << std::setw(2) << tm_utc.tm_hour
-      << std::setw(2) << tm_utc.tm_min
-      << std::setw(2) << tm_utc.tm_sec
-      << ".bin";
-  return oss.str();
-}
-
-// Note: ReadValue function moved to UDPDataSink.hpp
-
-// Helper to load a binary log file and populate signal registry
-bool LoadLogFile(const std::string &filename) {
-  std::ifstream file(filename, std::ios::binary | std::ios::ate);
-  if (!file.is_open()) {
-    fprintf(stderr, "Failed to open log file: %s\n", filename.c_str());
-    return false;
-  }
-
-  // Get file size
-  std::streamsize fileSize = file.tellg();
-  file.seekg(0, std::ios::beg);
-
-  printf("Loading log file: %s (%lld bytes)\n", filename.c_str(), (long long)fileSize);
-
-  // Load packet definitions
-  std::vector<PacketDefinition> packets;
-  if (!SignalConfigLoader::Load("signals.yaml", packets)) {
-    fprintf(stderr, "Failed to load signals.yaml for offline playback\n");
-    return false;
-  }
-
-  // Clear existing signal registry and reinitialize for offline mode
-  // NOTE: Caller must already hold stateMutex
-  signalRegistry.clear();
-  for (const auto &pkt : packets) {
-    for (const auto &sig : pkt.signals) {
-      signalRegistry[sig.key] = Signal(sig.key, 2000, PlaybackMode::OFFLINE);
-    }
-  }
-
-  // Read and parse the entire file
-  char buffer[1024];
-  int packetsProcessed = 0;
-  double minTime = std::numeric_limits<double>::max();
-  double maxTime = std::numeric_limits<double>::lowest();
-
-  std::streampos currentPos = 0;
-  file.seekg(0, std::ios::beg);
-
-  while (currentPos < fileSize) {
-    // Read a chunk at current position
-    file.seekg(currentPos);
-    std::streamsize remainingBytes = fileSize - currentPos;
-    std::streamsize bytesToRead = std::min(remainingBytes, (std::streamsize)sizeof(buffer));
-
-    file.read(buffer, bytesToRead);
-    std::streamsize bytesRead = file.gcount();
-
-    if (bytesRead == 0) {
-      printf("Warning: Failed to read at position %lld\n", (long long)currentPos);
-      break;
-    }
-
-    // Try to match packet by header string
-    bool matched = false;
-    for (const PacketDefinition &pkt : packets) {
-      if (bytesRead >= (std::streamsize)pkt.sizeCheck &&
-          strncmp(buffer, pkt.headerString.c_str(), pkt.headerString.length()) == 0) {
-
-        // Matched packet! Process all signals
-        // NOTE: Caller already holds stateMutex
-        for (const auto &sig : pkt.signals) {
-          double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
-          double v = ReadValue(buffer, sig.type, sig.offset);
-
-          // Update signal registry (no lock needed - caller holds it)
-          signalRegistry[sig.key].AddPoint(t, v);
-
-          // Track time range
-          if (t < minTime) minTime = t;
-          if (t > maxTime) maxTime = t;
-        }
-
-        // Execute Lua packet callbacks (NOTE: caller holds stateMutex)
-        luaScriptManager.executePacketCallbacks(pkt.id, signalRegistry, PlaybackMode::OFFLINE);
-
-        packetsProcessed++;
-        matched = true;
-
-        // Advance to next packet
-        currentPos += pkt.sizeCheck;
-        break;
-      }
-    }
-
-    if (!matched) {
-      // Unknown data, skip one byte and try again
-      currentPos += 1;
-    }
-
-    // Progress indicator every 10000 packets
-    if (packetsProcessed % 10000 == 0 && packetsProcessed > 0) {
-      printf("Progress: %d packets processed (%.1f%%)...\n",
-             packetsProcessed,
-             100.0 * currentPos / fileSize);
-    }
-  }
-
-  file.close();
-  printf("Parsing complete.\n");
-
-  // Update offline playback state
-  offlineState.minTime = minTime;
-  offlineState.maxTime = maxTime;
-  offlineState.currentWindowStart = minTime;
-  offlineState.windowWidth = maxTime - minTime;  // Show entire file initially
-  offlineState.fileLoaded = true;
-  offlineState.loadedFilePath = filename;
-
-  printf("Log file loaded: %d packets processed\n", packetsProcessed);
-  printf("Time range: %.3f - %.3f seconds (duration: %.3f s)\n",
-         minTime, maxTime, maxTime - minTime);
-
-  return true;
-}
-
-// -------------------------------------------------------------------------
-// LAYOUT SAVE/LOAD
-// -------------------------------------------------------------------------
-bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots, const std::vector<ReadoutBox> &readouts, const std::vector<XYPlotWindow> &xyPlots, const std::vector<HistogramWindow> &histograms, const std::vector<FFTWindow> &ffts, const std::vector<SpectrogramWindow> &spectrograms) {
-  try {
-    YAML::Emitter out;
-    out << YAML::BeginMap;
-
-    // Save plots
-    out << YAML::Key << "plots" << YAML::Value << YAML::BeginSeq;
-    for (const auto &plot : plots) {
-      out << YAML::BeginMap;
-      out << YAML::Key << "id" << YAML::Value << plot.id;
-      out << YAML::Key << "title" << YAML::Value << plot.title;
-      out << YAML::Key << "paused" << YAML::Value << plot.paused;
-      out << YAML::Key << "signals" << YAML::Value << YAML::BeginSeq;
-      for (const auto &signal : plot.signalNames) {
-        out << signal;
-      }
-      out << YAML::EndSeq;
-      out << YAML::EndMap;
-    }
-    out << YAML::EndSeq;
-
-    // Save readout boxes
-    out << YAML::Key << "readouts" << YAML::Value << YAML::BeginSeq;
-    for (const auto &readout : readouts) {
-      out << YAML::BeginMap;
-      out << YAML::Key << "id" << YAML::Value << readout.id;
-      out << YAML::Key << "title" << YAML::Value << readout.title;
-      out << YAML::Key << "signal" << YAML::Value << readout.signalName;
-      out << YAML::EndMap;
-    }
-    out << YAML::EndSeq;
-
-    // Save X/Y plots
-    out << YAML::Key << "xyplots" << YAML::Value << YAML::BeginSeq;
-    for (const auto &xyPlot : xyPlots) {
-      out << YAML::BeginMap;
-      out << YAML::Key << "id" << YAML::Value << xyPlot.id;
-      out << YAML::Key << "title" << YAML::Value << xyPlot.title;
-      out << YAML::Key << "paused" << YAML::Value << xyPlot.paused;
-      out << YAML::Key << "xSignal" << YAML::Value << xyPlot.xSignalName;
-      out << YAML::Key << "ySignal" << YAML::Value << xyPlot.ySignalName;
-      out << YAML::EndMap;
-    }
-    out << YAML::EndSeq;
-
-    // Save histograms
-    out << YAML::Key << "histograms" << YAML::Value << YAML::BeginSeq;
-    for (const auto &histogram : histograms) {
-      out << YAML::BeginMap;
-      out << YAML::Key << "id" << YAML::Value << histogram.id;
-      out << YAML::Key << "title" << YAML::Value << histogram.title;
-      out << YAML::Key << "signal" << YAML::Value << histogram.signalName;
-      out << YAML::Key << "numBins" << YAML::Value << histogram.numBins;
-      out << YAML::EndMap;
-    }
-    out << YAML::EndSeq;
-
-    // Save FFT plots
-    out << YAML::Key << "ffts" << YAML::Value << YAML::BeginSeq;
-    for (const auto &fft : ffts) {
-      out << YAML::BeginMap;
-      out << YAML::Key << "id" << YAML::Value << fft.id;
-      out << YAML::Key << "title" << YAML::Value << fft.title;
-      out << YAML::Key << "signal" << YAML::Value << fft.signalName;
-      out << YAML::Key << "fftSize" << YAML::Value << fft.fftSize;
-      out << YAML::Key << "useHanning" << YAML::Value << fft.useHanning;
-      out << YAML::Key << "logScale" << YAML::Value << fft.logScale;
-      out << YAML::EndMap;
-    }
-    out << YAML::EndSeq;
-
-    // Save spectrograms
-    out << YAML::Key << "spectrograms" << YAML::Value << YAML::BeginSeq;
-    for (const auto &spectrogram : spectrograms) {
-      out << YAML::BeginMap;
-      out << YAML::Key << "id" << YAML::Value << spectrogram.id;
-      out << YAML::Key << "title" << YAML::Value << spectrogram.title;
-      out << YAML::Key << "signal" << YAML::Value << spectrogram.signalName;
-      out << YAML::Key << "fftSize" << YAML::Value << spectrogram.fftSize;
-      out << YAML::Key << "hopSize" << YAML::Value << spectrogram.hopSize;
-      out << YAML::Key << "useHanning" << YAML::Value << spectrogram.useHanning;
-      out << YAML::Key << "logScale" << YAML::Value << spectrogram.logScale;
-      out << YAML::Key << "timeWindow" << YAML::Value << spectrogram.timeWindow;
-      out << YAML::Key << "maxFrequency" << YAML::Value << spectrogram.maxFrequency;
-      out << YAML::EndMap;
-    }
-    out << YAML::EndSeq;
-
-    out << YAML::EndMap;
-
-    std::ofstream fout(filename);
-    if (!fout.is_open()) {
-      fprintf(stderr, "Failed to open file for writing: %s\n", filename.c_str());
-      return false;
-    }
-
-    fout << out.c_str();
-    fout.close();
-    printf("Layout saved to: %s\n", filename.c_str());
-    return true;
-  } catch (const std::exception &e) {
-    fprintf(stderr, "Error saving layout: %s\n", e.what());
-    return false;
-  }
-}
-
-bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int &nextPlotId,
-                std::vector<ReadoutBox> &readouts, int &nextReadoutId,
-                std::vector<XYPlotWindow> &xyPlots, int &nextXYPlotId,
-                std::vector<HistogramWindow> &histograms, int &nextHistogramId,
-                std::vector<FFTWindow> &ffts, int &nextFFTId,
-                std::vector<SpectrogramWindow> &spectrograms, int &nextSpectrogramId) {
-  try {
-    YAML::Node config = YAML::LoadFile(filename);
-    if (!config["plots"]) {
-      fprintf(stderr, "Invalid layout file: missing 'plots' key\n");
-      return false;
-    }
-
-    std::vector<PlotWindow> loadedPlots;
-    std::vector<ReadoutBox> loadedReadouts;
-    std::vector<XYPlotWindow> loadedXYPlots;
-    std::vector<HistogramWindow> loadedHistograms;
-    std::vector<FFTWindow> loadedFFTs;
-    std::vector<SpectrogramWindow> loadedSpectrograms;
-    int maxPlotId = 0;
-    int maxReadoutId = 0;
-    int maxXYPlotId = 0;
-    int maxHistogramId = 0;
-    int maxFFTId = 0;
-    int maxSpectrogramId = 0;
-
-    // Load plots
-    for (const auto &plotNode : config["plots"]) {
-      PlotWindow plot;
-      plot.id = plotNode["id"].as<int>();
-      plot.title = plotNode["title"].as<std::string>();
-      plot.paused = plotNode["paused"] ? plotNode["paused"].as<bool>() : false;
-      plot.isOpen = true;
-
-      if (plotNode["signals"]) {
-        for (const auto &signalNode : plotNode["signals"]) {
-          plot.signalNames.push_back(signalNode.as<std::string>());
-        }
-      }
-
-      loadedPlots.push_back(plot);
-      if (plot.id > maxPlotId) {
-        maxPlotId = plot.id;
-      }
-    }
-
-    // Load readout boxes (if present)
-    if (config["readouts"]) {
-      for (const auto &readoutNode : config["readouts"]) {
-        ReadoutBox readout;
-        readout.id = readoutNode["id"].as<int>();
-        readout.title = readoutNode["title"].as<std::string>();
-        readout.signalName = readoutNode["signal"] ? readoutNode["signal"].as<std::string>() : "";
-        readout.isOpen = true;
-
-        loadedReadouts.push_back(readout);
-        if (readout.id > maxReadoutId) {
-          maxReadoutId = readout.id;
-        }
-      }
-    }
-
-    // Load X/Y plots (if present)
-    if (config["xyplots"]) {
-      for (const auto &xyPlotNode : config["xyplots"]) {
-        XYPlotWindow xyPlot;
-        xyPlot.id = xyPlotNode["id"].as<int>();
-        xyPlot.title = xyPlotNode["title"].as<std::string>();
-        xyPlot.paused = xyPlotNode["paused"] ? xyPlotNode["paused"].as<bool>() : false;
-        xyPlot.xSignalName = xyPlotNode["xSignal"] ? xyPlotNode["xSignal"].as<std::string>() : "";
-        xyPlot.ySignalName = xyPlotNode["ySignal"] ? xyPlotNode["ySignal"].as<std::string>() : "";
-        xyPlot.isOpen = true;
-
-        loadedXYPlots.push_back(xyPlot);
-        if (xyPlot.id > maxXYPlotId) {
-          maxXYPlotId = xyPlot.id;
-        }
-      }
-    }
-
-    // Load histograms (if present)
-    if (config["histograms"]) {
-      for (const auto &histogramNode : config["histograms"]) {
-        HistogramWindow histogram;
-        histogram.id = histogramNode["id"].as<int>();
-        histogram.title = histogramNode["title"].as<std::string>();
-        histogram.signalName = histogramNode["signal"] ? histogramNode["signal"].as<std::string>() : "";
-        histogram.numBins = histogramNode["numBins"] ? histogramNode["numBins"].as<int>() : 50;
-        histogram.isOpen = true;
-
-        loadedHistograms.push_back(histogram);
-        if (histogram.id > maxHistogramId) {
-          maxHistogramId = histogram.id;
-        }
-      }
-    }
-
-    // Load FFT plots (if present)
-    if (config["ffts"]) {
-      for (const auto &fftNode : config["ffts"]) {
-        FFTWindow fft;
-        fft.id = fftNode["id"].as<int>();
-        fft.title = fftNode["title"].as<std::string>();
-        fft.signalName = fftNode["signal"] ? fftNode["signal"].as<std::string>() : "";
-        fft.fftSize = fftNode["fftSize"] ? fftNode["fftSize"].as<int>() : 2048;
-        fft.useHanning = fftNode["useHanning"] ? fftNode["useHanning"].as<bool>() : true;
-        fft.logScale = fftNode["logScale"] ? fftNode["logScale"].as<bool>() : true;
-        fft.isOpen = true;
-
-        loadedFFTs.push_back(fft);
-        if (fft.id > maxFFTId) {
-          maxFFTId = fft.id;
-        }
-      }
-    }
-
-    // Load spectrograms (if present)
-    if (config["spectrograms"]) {
-      for (const auto &spectrogramNode : config["spectrograms"]) {
-        SpectrogramWindow spectrogram;
-        spectrogram.id = spectrogramNode["id"].as<int>();
-        spectrogram.title = spectrogramNode["title"].as<std::string>();
-        spectrogram.signalName = spectrogramNode["signal"] ? spectrogramNode["signal"].as<std::string>() : "";
-        spectrogram.fftSize = spectrogramNode["fftSize"] ? spectrogramNode["fftSize"].as<int>() : 512;
-        spectrogram.hopSize = spectrogramNode["hopSize"] ? spectrogramNode["hopSize"].as<int>() : 128;
-        spectrogram.useHanning = spectrogramNode["useHanning"] ? spectrogramNode["useHanning"].as<bool>() : true;
-        spectrogram.logScale = spectrogramNode["logScale"] ? spectrogramNode["logScale"].as<bool>() : true;
-        spectrogram.timeWindow = spectrogramNode["timeWindow"] ? spectrogramNode["timeWindow"].as<double>() : 5.0;
-        spectrogram.maxFrequency = spectrogramNode["maxFrequency"] ? spectrogramNode["maxFrequency"].as<int>() : 0;
-        spectrogram.isOpen = true;
-
-        loadedSpectrograms.push_back(spectrogram);
-        if (spectrogram.id > maxSpectrogramId) {
-          maxSpectrogramId = spectrogram.id;
-        }
-      }
-    }
-
-    plots = loadedPlots;
-    readouts = loadedReadouts;
-    xyPlots = loadedXYPlots;
-    histograms = loadedHistograms;
-    ffts = loadedFFTs;
-    spectrograms = loadedSpectrograms;
-    nextPlotId = maxPlotId + 1;
-    nextReadoutId = maxReadoutId + 1;
-    nextXYPlotId = maxXYPlotId + 1;
-    nextHistogramId = maxHistogramId + 1;
-    nextFFTId = maxFFTId + 1;
-    nextSpectrogramId = maxSpectrogramId + 1;
-    printf("Layout loaded from: %s\n", filename.c_str());
-    return true;
-  } catch (const std::exception &e) {
-    fprintf(stderr, "Error loading layout: %s\n", e.what());
-    return false;
-  }
-}
 
 void NetworkReceiverThread() {
   // Load packet definitions
@@ -686,18 +270,15 @@ void MainLoopStep(void *arg) {
   // ---------------------------------------------------------
   // UI: MENU BAR
   // ---------------------------------------------------------
-  static char ipBuffer[64] = "localhost";
-  static char portBuffer[16] = "5000";
-  static bool buffersInitialized = false;
+  RenderMenuBar(uiPlotState);
 
-  // Initialize buffers once with current values
-  if (!buffersInitialized) {
-    std::lock_guard<std::mutex> lock(networkConfigMutex);
-    strncpy(ipBuffer, networkIP.c_str(), sizeof(ipBuffer) - 1);
-    snprintf(portBuffer, sizeof(portBuffer), "%d", networkPort);
-    buffersInitialized = true;
-  }
+  // ---------------------------------------------------------
+  // PLACEHOLDER: Additional UI sections will be called here
+  // ---------------------------------------------------------
+  float menuBarHeight = ImGui::GetFrameHeight();
 
+  // Temporarily keep original UI code below until fully refactored
+  #if 0
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("File")) {
       if (ImGui::MenuItem("Save Layout")) {
@@ -842,11 +423,11 @@ void MainLoopStep(void *arg) {
 
     ImGui::EndMainMenuBar();
   }
+  #endif // End of commented-out menu bar code
 
   // ---------------------------------------------------------
   // UI: LEFT PANEL (Signal List)
   // ---------------------------------------------------------
-  float menuBarHeight = ImGui::GetFrameHeight();
   ImGui::SetNextWindowPos(ImVec2(0, menuBarHeight), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowSize(ImVec2(300, io.DisplaySize.y - menuBarHeight), ImGuiCond_FirstUseEver);
 
@@ -862,45 +443,45 @@ void MainLoopStep(void *arg) {
   if (ImGui::BeginPopup("AddNewPopup")) {
     if (ImGui::MenuItem("Time-based Plot")) {
       PlotWindow newPlot;
-      newPlot.id = nextPlotId++;
+      newPlot.id = uiPlotState.nextPlotId++;
       newPlot.title = "Plot " + std::to_string(newPlot.id);
-      activePlots.push_back(newPlot);
+      uiPlotState.activePlots.push_back(newPlot);
     }
     if (ImGui::MenuItem("X/Y Plot")) {
       XYPlotWindow newXYPlot;
-      newXYPlot.id = nextXYPlotId++;
+      newXYPlot.id = uiPlotState.nextXYPlotId++;
       newXYPlot.title = "X/Y Plot " + std::to_string(newXYPlot.id);
       newXYPlot.xSignalName = "";
       newXYPlot.ySignalName = "";
-      activeXYPlots.push_back(newXYPlot);
+      uiPlotState.activeXYPlots.push_back(newXYPlot);
     }
     if (ImGui::MenuItem("Readout Box")) {
       ReadoutBox newReadout;
-      newReadout.id = nextReadoutBoxId++;
+      newReadout.id = uiPlotState.nextReadoutBoxId++;
       newReadout.title = "Readout " + std::to_string(newReadout.id);
       newReadout.signalName = ""; // Empty initially
-      activeReadoutBoxes.push_back(newReadout);
+      uiPlotState.activeReadoutBoxes.push_back(newReadout);
     }
     if (ImGui::MenuItem("Histogram")) {
       HistogramWindow newHistogram;
-      newHistogram.id = nextHistogramId++;
+      newHistogram.id = uiPlotState.nextHistogramId++;
       newHistogram.title = "Histogram " + std::to_string(newHistogram.id);
       newHistogram.signalName = ""; // Empty initially
-      activeHistograms.push_back(newHistogram);
+      uiPlotState.activeHistograms.push_back(newHistogram);
     }
     if (ImGui::MenuItem("FFT Plot")) {
       FFTWindow newFFT;
-      newFFT.id = nextFFTId++;
+      newFFT.id = uiPlotState.nextFFTId++;
       newFFT.title = "FFT " + std::to_string(newFFT.id);
       newFFT.signalName = ""; // Empty initially
-      activeFFTs.push_back(newFFT);
+      uiPlotState.activeFFTs.push_back(newFFT);
     }
     if (ImGui::MenuItem("Spectrogram")) {
       SpectrogramWindow newSpectrogram;
-      newSpectrogram.id = nextSpectrogramId++;
+      newSpectrogram.id = uiPlotState.nextSpectrogramId++;
       newSpectrogram.title = "Spectrogram " + std::to_string(newSpectrogram.id);
       newSpectrogram.signalName = ""; // Empty initially
-      activeSpectrograms.push_back(newSpectrogram);
+      uiPlotState.activeSpectrograms.push_back(newSpectrogram);
     }
     ImGui::EndPopup();
   }
@@ -932,7 +513,7 @@ void MainLoopStep(void *arg) {
   // ---------------------------------------------------------
 
   // Loop through all active plot windows
-  for (auto &plot : activePlots) {
+  for (auto &plot : uiPlotState.activePlots) {
     if (!plot.isOpen)
       continue;
 
@@ -1016,7 +597,7 @@ void MainLoopStep(void *arg) {
   // ---------------------------------------------------------
 
   // Loop through all active readout boxes
-  for (auto &readout : activeReadoutBoxes) {
+  for (auto &readout : uiPlotState.activeReadoutBoxes) {
     if (!readout.isOpen)
       continue;
 
@@ -1113,7 +694,7 @@ void MainLoopStep(void *arg) {
   // ---------------------------------------------------------
 
   // Loop through all active X/Y plots
-  for (auto &xyPlot : activeXYPlots) {
+  for (auto &xyPlot : uiPlotState.activeXYPlots) {
     if (!xyPlot.isOpen)
       continue;
 
@@ -1259,7 +840,7 @@ void MainLoopStep(void *arg) {
   // ---------------------------------------------------------
 
   // Loop through all active histograms
-  for (auto &histogram : activeHistograms) {
+  for (auto &histogram : uiPlotState.activeHistograms) {
     if (!histogram.isOpen)
       continue;
 
@@ -1373,7 +954,7 @@ void MainLoopStep(void *arg) {
   // ---------------------------------------------------------
 
   // Loop through all active FFT plots
-  for (auto &fft : activeFFTs) {
+  for (auto &fft : uiPlotState.activeFFTs) {
     if (!fft.isOpen)
       continue;
 
@@ -1527,7 +1108,7 @@ void MainLoopStep(void *arg) {
   // ---------------------------------------------------------
 
   // Loop through all active spectrograms
-  for (auto &spectrogram : activeSpectrograms) {
+  for (auto &spectrogram : uiPlotState.activeSpectrograms) {
     if (!spectrogram.isOpen)
       continue;
 
@@ -1859,7 +1440,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("SaveLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      SaveLayout(filePathName, activePlots, activeReadoutBoxes, activeXYPlots, activeHistograms, activeFFTs, activeSpectrograms);
+      SaveLayout(filePathName, uiPlotState.activePlots, uiPlotState.activeReadoutBoxes, uiPlotState.activeXYPlots, uiPlotState.activeHistograms, uiPlotState.activeFFTs, uiPlotState.activeSpectrograms);
     }
     ImGuiFileDialog::Instance()->Close();
   }
@@ -1868,7 +1449,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("OpenLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId, activeHistograms, nextHistogramId, activeFFTs, nextFFTId, activeSpectrograms, nextSpectrogramId)) {
+      if (LoadLayout(filePathName, uiPlotState.activePlots, uiPlotState.nextPlotId, uiPlotState.activeReadoutBoxes, uiPlotState.nextReadoutBoxId, uiPlotState.activeXYPlots, uiPlotState.nextXYPlotId, uiPlotState.activeHistograms, uiPlotState.nextHistogramId, uiPlotState.activeFFTs, uiPlotState.nextFFTId, uiPlotState.activeSpectrograms, uiPlotState.nextSpectrogramId)) {
         // Layout loaded successfully
       }
     }
@@ -1879,7 +1460,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("OpenLogFileDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLogFile(filePathName)) {
+      if (LoadLogFile(filePathName, signalRegistry, offlineState, luaScriptManager)) {
         // Log file loaded successfully
         printf("Successfully loaded log file into offline mode\n");
       }
@@ -1899,20 +1480,20 @@ void MainLoopStep(void *arg) {
   // ---------------------------------------------------------
   // CLEANUP PHASE (The "Erase-Remove Idiom")
   // ---------------------------------------------------------
-  activePlots.erase(
-      std::remove_if(activePlots.begin(), activePlots.end(),
+  uiPlotState.activePlots.erase(
+      std::remove_if(uiPlotState.activePlots.begin(), uiPlotState.activePlots.end(),
                      [](const PlotWindow &p) { return !p.isOpen; }),
-      activePlots.end());
+      uiPlotState.activePlots.end());
 
-  activeReadoutBoxes.erase(
-      std::remove_if(activeReadoutBoxes.begin(), activeReadoutBoxes.end(),
+  uiPlotState.activeReadoutBoxes.erase(
+      std::remove_if(uiPlotState.activeReadoutBoxes.begin(), uiPlotState.activeReadoutBoxes.end(),
                      [](const ReadoutBox &r) { return !r.isOpen; }),
-      activeReadoutBoxes.end());
+      uiPlotState.activeReadoutBoxes.end());
 
-  activeXYPlots.erase(
-      std::remove_if(activeXYPlots.begin(), activeXYPlots.end(),
+  uiPlotState.activeXYPlots.erase(
+      std::remove_if(uiPlotState.activeXYPlots.begin(), uiPlotState.activeXYPlots.end(),
                      [](const XYPlotWindow &xy) { return !xy.isOpen; }),
-      activeXYPlots.end());
+      uiPlotState.activeXYPlots.end());
 
   // Render
   ImGui::Render();
