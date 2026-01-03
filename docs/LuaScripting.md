@@ -388,12 +388,44 @@ See `signals.yaml` for the complete, up-to-date list of available signals.
 
 ## Future Extensions
 
-The current implementation focuses on **Tier 1: Signal Transforms**. Future enhancements may include:
+### ✅ Tier 1: Signal Transforms (COMPLETE)
+Current implementation - transform existing signals into derived signals.
 
-- **Tier 2: Frame Callbacks** - Execute code every GUI frame for monitoring and alerting
-- **Tier 3: Plot Configuration** - Programmatically create and configure plot windows
-- **Custom Packet Parsers** - Define new packet types in Lua
-- **Data Export** - Scripted export to custom formats
+### ✅ Tier 2: Lua Packet Parsing (COMPLETE - 2026-01-03)
+**Custom packet parsers written entirely in Lua!**
+
+Parse any packet format (binary, JSON, CSV, Protobuf, encrypted, etc.) without recompiling the GUI.
+
+**New Features:**
+- Byte-manipulation API: `readUInt8/16/32/64`, `readInt8/16/32/64`, `readFloat/Double`
+- String readers: `readString`, `readCString`
+- Buffer utilities: `getBufferLength`, `getBufferByte`, `bytesToHex`
+- Signal manipulation: `update_signal`, `create_signal`
+- Parser registration: `register_parser(name, function)`
+- Endianness handling (little/big-endian)
+- Auto-generated backward compatibility with signals.yaml
+
+**Documentation:** See `docs/LuaPacketParsing.md` for complete API reference and examples.
+
+**Example parsers:**
+- `scripts/parsers/legacy_binary.lua` - Auto-generated from signals.yaml
+- `scripts/parsers/json_example.lua` - JSON parsing example
+- `scripts/parsers/csv_example.lua` - CSV parsing example
+
+### 🔄 Tier 3: Frame Callbacks & Monitoring (TODO)
+- Execute code every GUI frame for monitoring and alerting
+- Event-based alerting when signals meet conditions
+- Statistics accumulation and custom logging
+
+### 🔄 Tier 4: GUI Control Elements (TODO)
+- Dynamic UI element creation from Lua
+- Button callbacks with custom actions
+- Text input boxes for configuration
+
+### 🔄 Tier 5: Timers & Async Operations (TODO)
+- Timer registration (one-shot and cyclic)
+- Heartbeat/keep-alive signal support
+- Integration with network transmission
 
 ## Technical Details
 

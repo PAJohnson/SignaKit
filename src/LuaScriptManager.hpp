@@ -7,6 +7,9 @@
 #include <functional>
 #include <mutex>
 #include <filesystem>
+#include <sstream>
+#include <iomanip>
+#include <cstring>
 #include "types.hpp"
 
 namespace fs = std::filesystem;
@@ -42,6 +45,12 @@ public:
         // on_packet(packetType, outputName, function) - registers a callback for a specific packet
         lua.set_function("on_packet", [this](const std::string& packetType, const std::string& outputName, sol::protected_function func) {
             registerPacketCallback(packetType, outputName, func);
+        });
+
+        // Expose packet parser registration API
+        // register_parser(name, function) - registers a parser that receives (buffer, length) and returns true if handled
+        lua.set_function("register_parser", [this](const std::string& parserName, sol::protected_function func) {
+            registerPacketParser(parserName, func);
         });
 
         // Expose logging API
@@ -104,7 +113,8 @@ public:
         }
 
         printf("[LuaScriptManager] Loading scripts from: %s\n", dirPath.c_str());
-        for (const auto& entry : fs::directory_iterator(dirPath)) {
+        // Use recursive_directory_iterator to load from subdirectories (e.g., scripts/parsers/)
+        for (const auto& entry : fs::recursive_directory_iterator(dirPath)) {
             if (entry.is_regular_file() && entry.path().extension() == ".lua") {
                 loadScript(entry.path().string());
             }
@@ -115,8 +125,9 @@ public:
     void reloadAllScripts() {
         printf("[LuaScriptManager] Reloading all scripts...\n");
 
-        // Clear packet callbacks (they'll be re-registered by scripts)
+        // Clear packet callbacks and parsers (they'll be re-registered by scripts)
         packetCallbacks.clear();
+        packetParsers.clear();
 
         // Reinitialize Lua state
         initializeLuaState();
@@ -202,6 +213,48 @@ public:
         return lua;
     }
 
+    // Parse a packet using registered Lua parsers
+    // NOTE: Caller must hold stateMutex lock before calling this function
+    // Returns true if at least one parser handled the packet
+    bool parsePacket(const char* buffer, size_t length, std::map<std::string, Signal>& signalRegistry, PlaybackMode mode = PlaybackMode::ONLINE) {
+        // Set the registry so Lua functions can access it
+        currentSignalRegistry = &signalRegistry;
+
+        // Copy buffer into Lua string for safe memory handling
+        std::string bufferStr(buffer, length);
+
+        bool handled = false;
+
+        // Try each registered parser in order
+        for (const auto& [parserName, parserFunc] : packetParsers) {
+            try {
+                auto result = parserFunc(bufferStr, length);
+
+                if (!result.valid()) {
+                    sol::error err = result;
+                    printf("[LuaScriptManager] Parser '%s' error: %s\n", parserName.c_str(), err.what());
+                    continue;
+                }
+
+                // Check if parser handled the packet (returned true)
+                if (result.return_count() > 0) {
+                    sol::object retVal = result;
+                    if (retVal.is<bool>() && retVal.as<bool>()) {
+                        handled = true;
+                        break; // First parser that handles it wins
+                    }
+                }
+            } catch (const std::exception& e) {
+                printf("[LuaScriptManager] Exception in parser '%s': %s\n", parserName.c_str(), e.what());
+            }
+        }
+
+        // Clear the registry pointer
+        currentSignalRegistry = nullptr;
+
+        return handled;
+    }
+
 private:
     sol::state lua;
     std::vector<LuaScript> scripts;
@@ -209,8 +262,183 @@ private:
     // Map: PacketType -> vector of (outputSignalName, luaCallback)
     std::multimap<std::string, std::pair<std::string, sol::protected_function>> packetCallbacks;
 
+    // Vector of registered packet parsers: (parserName, parserFunction)
+    std::vector<std::pair<std::string, sol::protected_function>> packetParsers;
+
     // Pointer to signal registry (set during executePacketCallbacks)
     std::map<std::string, Signal>* currentSignalRegistry = nullptr;
+
+    // Helper functions for endianness conversion
+    template<typename T>
+    T swapEndian(T value) {
+        static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8,
+                      "Type must be 1, 2, 4, or 8 bytes");
+
+        if constexpr (sizeof(T) == 1) {
+            return value;
+        } else if constexpr (sizeof(T) == 2) {
+            return ((value & 0xFF00) >> 8) | ((value & 0x00FF) << 8);
+        } else if constexpr (sizeof(T) == 4) {
+            return ((value & 0xFF000000) >> 24) |
+                   ((value & 0x00FF0000) >> 8)  |
+                   ((value & 0x0000FF00) << 8)  |
+                   ((value & 0x000000FF) << 24);
+        } else if constexpr (sizeof(T) == 8) {
+            return ((value & 0xFF00000000000000ULL) >> 56) |
+                   ((value & 0x00FF000000000000ULL) >> 40) |
+                   ((value & 0x0000FF0000000000ULL) >> 24) |
+                   ((value & 0x000000FF00000000ULL) >> 8)  |
+                   ((value & 0x00000000FF000000ULL) << 8)  |
+                   ((value & 0x0000000000FF0000ULL) << 24) |
+                   ((value & 0x000000000000FF00ULL) << 40) |
+                   ((value & 0x00000000000000FFULL) << 56);
+        }
+    }
+
+    // Template function to read numeric values from buffer
+    template<typename T>
+    sol::optional<T> readNumeric(const std::string& buffer, size_t offset, bool littleEndian) {
+        if (offset + sizeof(T) > buffer.size()) {
+            return sol::nullopt;
+        }
+
+        T value;
+        std::memcpy(&value, buffer.data() + offset, sizeof(T));
+
+        // Determine if we need to swap
+        bool isSystemLittleEndian = true; // Windows is always little-endian
+        if (littleEndian != isSystemLittleEndian) {
+            value = swapEndian(value);
+        }
+
+        return value;
+    }
+
+    // Expose buffer parsing API to Lua
+    void exposeBufferParsingAPI() {
+        // Unsigned integer readers
+        lua.set_function("readUInt8", [this](const std::string& buffer, size_t offset) -> sol::optional<uint8_t> {
+            if (offset >= buffer.size()) return sol::nullopt;
+            return static_cast<uint8_t>(buffer[offset]);
+        });
+
+        lua.set_function("readUInt16", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<uint16_t> {
+            return readNumeric<uint16_t>(buffer, offset, littleEndian.value_or(true));
+        });
+
+        lua.set_function("readUInt32", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<uint32_t> {
+            return readNumeric<uint32_t>(buffer, offset, littleEndian.value_or(true));
+        });
+
+        lua.set_function("readUInt64", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<uint64_t> {
+            return readNumeric<uint64_t>(buffer, offset, littleEndian.value_or(true));
+        });
+
+        // Signed integer readers
+        lua.set_function("readInt8", [this](const std::string& buffer, size_t offset) -> sol::optional<int8_t> {
+            if (offset >= buffer.size()) return sol::nullopt;
+            return static_cast<int8_t>(buffer[offset]);
+        });
+
+        lua.set_function("readInt16", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<int16_t> {
+            return readNumeric<int16_t>(buffer, offset, littleEndian.value_or(true));
+        });
+
+        lua.set_function("readInt32", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<int32_t> {
+            return readNumeric<int32_t>(buffer, offset, littleEndian.value_or(true));
+        });
+
+        lua.set_function("readInt64", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<int64_t> {
+            return readNumeric<int64_t>(buffer, offset, littleEndian.value_or(true));
+        });
+
+        // Floating point readers
+        lua.set_function("readFloat", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<float> {
+            if (offset + sizeof(float) > buffer.size()) return sol::nullopt;
+
+            uint32_t bits = readNumeric<uint32_t>(buffer, offset, littleEndian.value_or(true)).value_or(0);
+            float value;
+            std::memcpy(&value, &bits, sizeof(float));
+            return value;
+        });
+
+        lua.set_function("readDouble", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<double> {
+            if (offset + sizeof(double) > buffer.size()) return sol::nullopt;
+
+            uint64_t bits = readNumeric<uint64_t>(buffer, offset, littleEndian.value_or(true)).value_or(0);
+            double value;
+            std::memcpy(&value, &bits, sizeof(double));
+            return value;
+        });
+
+        // String readers
+        lua.set_function("readString", [this](const std::string& buffer, size_t offset, size_t length) -> sol::optional<std::string> {
+            if (offset + length > buffer.size()) return sol::nullopt;
+            return buffer.substr(offset, length);
+        });
+
+        lua.set_function("readCString", [this](const std::string& buffer, size_t offset) -> sol::optional<std::string> {
+            if (offset >= buffer.size()) return sol::nullopt;
+
+            size_t nullPos = buffer.find('\0', offset);
+            if (nullPos == std::string::npos) {
+                // No null terminator found, return rest of string
+                return buffer.substr(offset);
+            }
+            return buffer.substr(offset, nullPos - offset);
+        });
+
+        // Buffer inspection utilities
+        lua.set_function("getBufferLength", [](const std::string& buffer) -> size_t {
+            return buffer.size();
+        });
+
+        lua.set_function("getBufferByte", [](const std::string& buffer, size_t index) -> sol::optional<uint8_t> {
+            if (index >= buffer.size()) return sol::nullopt;
+            return static_cast<uint8_t>(buffer[index]);
+        });
+
+        // Debug utility - convert bytes to hex string
+        lua.set_function("bytesToHex", [](const std::string& buffer, size_t offset, size_t length) -> sol::optional<std::string> {
+            if (offset + length > buffer.size()) return sol::nullopt;
+
+            std::stringstream ss;
+            ss << std::hex << std::setfill('0');
+            for (size_t i = 0; i < length; ++i) {
+                ss << std::setw(2) << static_cast<int>(static_cast<uint8_t>(buffer[offset + i]));
+                if (i < length - 1) ss << " ";
+            }
+            return ss.str();
+        });
+
+        // Signal manipulation functions
+        lua.set_function("update_signal", [this](const std::string& name, double timestamp, double value) {
+            if (currentSignalRegistry == nullptr) {
+                printf("[Lua] Warning: Cannot update signal '%s' - no active signal registry\n", name.c_str());
+                return;
+            }
+
+            // Get or create the signal
+            if (currentSignalRegistry->find(name) == currentSignalRegistry->end()) {
+                (*currentSignalRegistry)[name] = Signal(name, 2000, PlaybackMode::ONLINE);
+            }
+
+            Signal& sig = (*currentSignalRegistry)[name];
+            sig.AddPoint(timestamp, value);
+        });
+
+        lua.set_function("create_signal", [this](const std::string& name) {
+            if (currentSignalRegistry == nullptr) {
+                printf("[Lua] Warning: Cannot create signal '%s' - no active signal registry\n", name.c_str());
+                return;
+            }
+
+            if (currentSignalRegistry->find(name) == currentSignalRegistry->end()) {
+                (*currentSignalRegistry)[name] = Signal(name, 2000, PlaybackMode::ONLINE);
+                printf("[Lua] Created signal: %s\n", name.c_str());
+            }
+        });
+    }
 
     // Get current timestamp for a packet type by looking at its signals
     double getCurrentTimestamp(std::map<std::string, Signal>& signalRegistry, const std::string& packetType) {
@@ -243,6 +471,9 @@ private:
     void exposeSignalAPI() {
         // Create a "signals" table that provides access to signal values
         lua["signals"] = lua.create_table();
+
+        // Expose buffer parsing API
+        exposeBufferParsingAPI();
 
         // Function to get the latest value of a signal
         lua.set_function("get_signal", [this](const std::string& name) -> sol::optional<double> {
@@ -313,5 +544,13 @@ private:
     void registerPacketCallback(const std::string& packetType, const std::string& outputName, sol::protected_function func) {
         packetCallbacks.insert({packetType, {outputName, func}});
         printf("[LuaScriptManager] Registered packet callback for: %s -> %s\n", packetType.c_str(), outputName.c_str());
+    }
+
+    // Register a packet parser function
+    // parserName: Name of the parser (for debugging)
+    // func: Lua function that receives (buffer, length) and returns true if packet was handled
+    void registerPacketParser(const std::string& parserName, sol::protected_function func) {
+        packetParsers.push_back({parserName, func});
+        printf("[LuaScriptManager] Registered packet parser: %s\n", parserName.c_str());
     }
 };

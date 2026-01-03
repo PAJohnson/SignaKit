@@ -5,6 +5,9 @@
 #include <map>
 #include <vector>
 
+// Forward declaration to avoid circular dependency
+class LuaScriptManager;
+
 // This is a base class for a way to connect to a data source
 // This can be UDP packets, serial, CAN, whatever
 // By inheriting from this class and implementing its methods, the parsing
@@ -17,9 +20,12 @@ protected:
     std::map<std::string, Signal>& signalRegistry;
     std::vector<PacketDefinition>& packets;
 
+    // Optional Lua script manager for custom parsers (Tier 2 feature)
+    LuaScriptManager* luaManager;
+
 public:
-    DataSink(std::map<std::string, Signal>& registry, std::vector<PacketDefinition>& packetDefs)
-        : signalRegistry(registry), packets(packetDefs) {}
+    DataSink(std::map<std::string, Signal>& registry, std::vector<PacketDefinition>& packetDefs, LuaScriptManager* luaMgr = nullptr)
+        : signalRegistry(registry), packets(packetDefs), luaManager(luaMgr) {}
 
     virtual ~DataSink() = default;
 

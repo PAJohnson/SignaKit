@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DataSink.hpp"
+#include "../LuaScriptManager.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <string>
@@ -28,8 +29,9 @@ public:
                 const std::string& ipAddress,
                 int portNumber,
                 std::ofstream* logFilePtr = nullptr,
-                std::mutex* logMutex = nullptr)
-        : DataSink(registry, packetDefs)
+                std::mutex* logMutex = nullptr,
+                LuaScriptManager* luaMgr = nullptr)
+        : DataSink(registry, packetDefs, luaMgr)
         , ip(ipAddress)
         , port(portNumber)
         , sockfd(INVALID_SOCKET)
@@ -118,25 +120,34 @@ public:
             }
         }
 
-        // Find matching packet by header string
-        for (const PacketDefinition& pkt : packets) {
-            if (strncmp(buffer, pkt.headerString.c_str(),
-                        pkt.headerString.length()) == 0) {
+        // Try Lua parsers first (Tier 2 feature)
+        bool parsedByLua = false;
+        if (luaManager) {
+            parsedByLua = luaManager->parsePacket(buffer, len, signalRegistry);
+        }
 
-                // Matched packet! Process all signals in this packet
-                for (const auto &sig : pkt.signals) {
-                    double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
-                    double v = ReadValue(buffer, sig.type, sig.offset);
-                    signalRegistry[sig.key].AddPoint(t, v);
+        // Fall back to legacy C++ parsing if no Lua parser handled it
+        if (!parsedByLua && !packets.empty()) {
+            // Find matching packet by header string
+            for (const PacketDefinition& pkt : packets) {
+                if (strncmp(buffer, pkt.headerString.c_str(),
+                            pkt.headerString.length()) == 0) {
+
+                    // Matched packet! Process all signals in this packet
+                    for (const auto &sig : pkt.signals) {
+                        double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
+                        double v = ReadValue(buffer, sig.type, sig.offset);
+                        signalRegistry[sig.key].AddPoint(t, v);
+                    }
+
+                    // Invoke Lua callback if registered (Tier 1 feature - deprecated in Tier 2)
+                    if (packetCallback) {
+                        packetCallback(pkt.id);
+                    }
+
+                    // Break after finding the matching packet type
+                    break;
                 }
-
-                // Invoke Lua callback if registered
-                if (packetCallback) {
-                    packetCallback(pkt.id);
-                }
-
-                // Break after finding the matching packet type
-                break;
             }
         }
 
