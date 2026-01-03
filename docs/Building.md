@@ -20,6 +20,7 @@ This document provides instructions for building the Telemetry GUI on Windows.
              mingw-w64-ucrt-x86_64-cmake \
              mingw-w64-ucrt-x86_64-make \
              git
+   pacman -S mingw-w64-ucrt-x86_64-luajit
    ```
 
 ## Dependencies
