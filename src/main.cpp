@@ -74,6 +74,15 @@ struct XYPlotWindow {
   int historyOffset = 0;
 };
 
+// Represents one Histogram
+struct HistogramWindow {
+  int id;
+  std::string title;
+  std::string signalName; // Single signal to display (empty if none assigned)
+  bool isOpen = true;
+  int numBins = 50; // Number of histogram bins
+};
+
 // -------------------------------------------------------------------------
 // GLOBAL STATE
 // -------------------------------------------------------------------------
@@ -118,6 +127,10 @@ int nextReadoutBoxId = 1; // Auto-increment ID for readout box titles
 // X/Y plots
 std::vector<XYPlotWindow> activeXYPlots;
 int nextXYPlotId = 1; // Auto-increment ID for X/Y plot titles
+
+// Histograms
+std::vector<HistogramWindow> activeHistograms;
+int nextHistogramId = 1; // Auto-increment ID for histogram titles
 
 // -------------------------------------------------------------------------
 // NETWORK THREAD
@@ -260,7 +273,7 @@ bool LoadLogFile(const std::string &filename) {
 // -------------------------------------------------------------------------
 // LAYOUT SAVE/LOAD
 // -------------------------------------------------------------------------
-bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots, const std::vector<ReadoutBox> &readouts, const std::vector<XYPlotWindow> &xyPlots) {
+bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plots, const std::vector<ReadoutBox> &readouts, const std::vector<XYPlotWindow> &xyPlots, const std::vector<HistogramWindow> &histograms) {
   try {
     YAML::Emitter out;
     out << YAML::BeginMap;
@@ -305,6 +318,18 @@ bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plot
     }
     out << YAML::EndSeq;
 
+    // Save histograms
+    out << YAML::Key << "histograms" << YAML::Value << YAML::BeginSeq;
+    for (const auto &histogram : histograms) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << histogram.id;
+      out << YAML::Key << "title" << YAML::Value << histogram.title;
+      out << YAML::Key << "signal" << YAML::Value << histogram.signalName;
+      out << YAML::Key << "numBins" << YAML::Value << histogram.numBins;
+      out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+
     out << YAML::EndMap;
 
     std::ofstream fout(filename);
@@ -325,7 +350,8 @@ bool SaveLayout(const std::string &filename, const std::vector<PlotWindow> &plot
 
 bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int &nextPlotId,
                 std::vector<ReadoutBox> &readouts, int &nextReadoutId,
-                std::vector<XYPlotWindow> &xyPlots, int &nextXYPlotId) {
+                std::vector<XYPlotWindow> &xyPlots, int &nextXYPlotId,
+                std::vector<HistogramWindow> &histograms, int &nextHistogramId) {
   try {
     YAML::Node config = YAML::LoadFile(filename);
     if (!config["plots"]) {
@@ -336,9 +362,11 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
     std::vector<PlotWindow> loadedPlots;
     std::vector<ReadoutBox> loadedReadouts;
     std::vector<XYPlotWindow> loadedXYPlots;
+    std::vector<HistogramWindow> loadedHistograms;
     int maxPlotId = 0;
     int maxReadoutId = 0;
     int maxXYPlotId = 0;
+    int maxHistogramId = 0;
 
     // Load plots
     for (const auto &plotNode : config["plots"]) {
@@ -394,12 +422,31 @@ bool LoadLayout(const std::string &filename, std::vector<PlotWindow> &plots, int
       }
     }
 
+    // Load histograms (if present)
+    if (config["histograms"]) {
+      for (const auto &histogramNode : config["histograms"]) {
+        HistogramWindow histogram;
+        histogram.id = histogramNode["id"].as<int>();
+        histogram.title = histogramNode["title"].as<std::string>();
+        histogram.signalName = histogramNode["signal"] ? histogramNode["signal"].as<std::string>() : "";
+        histogram.numBins = histogramNode["numBins"] ? histogramNode["numBins"].as<int>() : 50;
+        histogram.isOpen = true;
+
+        loadedHistograms.push_back(histogram);
+        if (histogram.id > maxHistogramId) {
+          maxHistogramId = histogram.id;
+        }
+      }
+    }
+
     plots = loadedPlots;
     readouts = loadedReadouts;
     xyPlots = loadedXYPlots;
+    histograms = loadedHistograms;
     nextPlotId = maxPlotId + 1;
     nextReadoutId = maxReadoutId + 1;
     nextXYPlotId = maxXYPlotId + 1;
+    nextHistogramId = maxHistogramId + 1;
     printf("Layout loaded from: %s\n", filename.c_str());
     return true;
   } catch (const std::exception &e) {
@@ -732,6 +779,13 @@ void MainLoopStep(void *arg) {
       newReadout.title = "Readout " + std::to_string(newReadout.id);
       newReadout.signalName = ""; // Empty initially
       activeReadoutBoxes.push_back(newReadout);
+    }
+    if (ImGui::MenuItem("Histogram")) {
+      HistogramWindow newHistogram;
+      newHistogram.id = nextHistogramId++;
+      newHistogram.title = "Histogram " + std::to_string(newHistogram.id);
+      newHistogram.signalName = ""; // Empty initially
+      activeHistograms.push_back(newHistogram);
     }
     ImGui::EndPopup();
   }
@@ -1086,6 +1140,120 @@ void MainLoopStep(void *arg) {
   }
 
   // ---------------------------------------------------------
+  // UI: HISTOGRAMS
+  // ---------------------------------------------------------
+
+  // Loop through all active histograms
+  for (auto &histogram : activeHistograms) {
+    if (!histogram.isOpen)
+      continue;
+
+    // Set initial position below menu bar for new histograms
+    ImGui::SetNextWindowPos(ImVec2(350, menuBarHeight + 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
+
+    // Use a stable ID (based on histogram.id) while displaying dynamic title
+    std::string windowID = histogram.title + "##Histogram" + std::to_string(histogram.id);
+    ImGui::Begin(windowID.c_str(), &histogram.isOpen);
+
+    // Display content based on whether a signal is assigned
+    if (histogram.signalName.empty()) {
+      // Show drag-and-drop message
+      ImVec2 windowSize = ImGui::GetWindowSize();
+      const char* text = "Drag and drop a signal here";
+      ImVec2 textSize = ImGui::CalcTextSize(text);
+      ImGui::SetCursorPosX((windowSize.x - textSize.x) * 0.5f);
+      ImGui::SetCursorPosY((windowSize.y - textSize.y) * 0.5f);
+      ImGui::TextWrapped("%s", text);
+
+      // Accept drag-and-drop for the entire window
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+          std::string droppedName = (const char *)payload->Data;
+          histogram.signalName = droppedName;
+          histogram.title = droppedName;
+        }
+        ImGui::EndDragDropTarget();
+      }
+    } else {
+      // Display the histogram
+      if (signalRegistry.count(histogram.signalName)) {
+        Signal &sig = signalRegistry[histogram.signalName];
+
+        // Controls at the top
+        ImGui::Text("Bins:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        ImGui::SliderInt("##Bins", &histogram.numBins, 10, 200);
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Signal")) {
+          histogram.signalName = "";
+          histogram.title = "Histogram " + std::to_string(histogram.id);
+        }
+
+        if (!sig.dataY.empty()) {
+          // Collect data points based on mode
+          std::vector<double> dataToHistogram;
+
+          if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
+            // Offline mode: collect all data up to current time window end
+            double targetTime = offlineState.currentWindowStart + offlineState.windowWidth;
+            for (size_t i = 0; i < sig.dataX.size(); i++) {
+              if (sig.dataX[i] <= targetTime) {
+                dataToHistogram.push_back(sig.dataY[i]);
+              } else {
+                break; // Assuming data is chronologically ordered
+              }
+            }
+          } else {
+            // Online mode: use all data in the circular buffer
+            if (sig.mode == PlaybackMode::ONLINE && sig.dataY.size() == sig.maxSize) {
+              // Buffer is full, use circular logic
+              for (size_t i = 0; i < sig.dataY.size(); i++) {
+                int idx = (sig.offset + i) % sig.dataY.size();
+                dataToHistogram.push_back(sig.dataY[idx]);
+              }
+            } else {
+              // Buffer not full yet, use all data
+              dataToHistogram = sig.dataY;
+            }
+          }
+
+          if (!dataToHistogram.empty()) {
+            // Plot the histogram
+            if (ImPlot::BeginPlot("##Histogram", ImVec2(-1, -1))) {
+              ImPlot::SetupAxes("Value", "Count", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+
+              ImPlot::PlotHistogram("##HistData", dataToHistogram.data(),
+                                   (int)dataToHistogram.size(), histogram.numBins);
+
+              ImPlot::EndPlot();
+            }
+          } else {
+            ImGui::TextDisabled("No data in current time window");
+          }
+        } else {
+          ImGui::TextDisabled("No data");
+        }
+      } else {
+        ImGui::TextDisabled("Signal not found");
+      }
+
+      // Accept drag-and-drop to change signal
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+          std::string droppedName = (const char *)payload->Data;
+          histogram.signalName = droppedName;
+          histogram.title = droppedName;
+        }
+        ImGui::EndDragDropTarget();
+      }
+    }
+
+    ImGui::End();
+  }
+
+  // ---------------------------------------------------------
   // UI: TIME SLIDER (Offline Mode Only)
   // ---------------------------------------------------------
   if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
@@ -1152,7 +1320,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("SaveLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      SaveLayout(filePathName, activePlots, activeReadoutBoxes, activeXYPlots);
+      SaveLayout(filePathName, activePlots, activeReadoutBoxes, activeXYPlots, activeHistograms);
     }
     ImGuiFileDialog::Instance()->Close();
   }
@@ -1161,7 +1329,7 @@ void MainLoopStep(void *arg) {
   if (ImGuiFileDialog::Instance()->Display("OpenLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId)) {
+      if (LoadLayout(filePathName, activePlots, nextPlotId, activeReadoutBoxes, nextReadoutBoxId, activeXYPlots, nextXYPlotId, activeHistograms, nextHistogramId)) {
         // Layout loaded successfully
       }
     }

@@ -28,3 +28,8 @@ public:
   static bool Load(const std::string &filename,
                    std::vector<PacketDefinition> &packets);
 };
+
+// Helper to read a value from the buffer based on type
+// Supports all stdint.h types plus legacy C types for backwards compatibility
+// All values are cast to double for storage in the signal buffers
+double ReadValue(const char *buffer, const std::string &type, int offset);
