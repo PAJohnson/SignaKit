@@ -28,12 +28,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// Network Includes
+// Network Includes (now handled in Lua via UDPDataSink.lua)
 #include "SignalConfigLoader.h"
-#include "DataSinks/UDPDataSink.hpp"
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#pragma comment(lib, "ws2_32.lib")
 
 // DPI Awareness
 #include <windows.h>
@@ -45,8 +41,6 @@
 #include "signal_processing.hpp"
 #include "ui_state.hpp"
 
-#define UDP_PORT 5000
-
 // Note: plot_rendering.hpp is included later, after global state definitions
 
 // -------------------------------------------------------------------------
@@ -57,17 +51,6 @@ std::atomic<bool> appRunning(true);
 
 // Playback mode state
 PlaybackMode currentPlaybackMode = PlaybackMode::ONLINE;
-
-// Network connection state
-std::atomic<bool> networkConnected(false);
-std::atomic<bool> networkShouldConnect(false);
-std::mutex networkConfigMutex;
-std::string networkIP = "localhost";
-int networkPort = UDP_PORT;
-
-// Data logging state
-std::ofstream logFile;
-std::mutex logFileMutex;
 
 // Parser selection state
 std::vector<std::string> availableParsers;
@@ -107,116 +90,11 @@ static auto lastFrameTime = std::chrono::high_resolution_clock::now();
 #include "control_rendering.hpp"
 
 // -------------------------------------------------------------------------
-// NETWORK THREAD
+// NETWORK HANDLING
 // -------------------------------------------------------------------------
-
-void NetworkReceiverThread() {
-  // Load packet definitions
-  std::vector<PacketDefinition> packets;
-  if (!SignalConfigLoader::Load("signals.yaml", packets)) {
-    printf(
-        "Failed to load signals.yaml! Network thread will not process data.\n");
-    return;
-  }
-
-  // Initialize signal registry with all signals from all packets
-  {
-    std::lock_guard<std::mutex> lock(stateMutex);
-    for (const auto &pkt : packets) {
-      for (const auto &sig : pkt.signals) {
-        signalRegistry[sig.key] = Signal(sig.key);
-      }
-    }
-  }
-
-  // Create UDPDataSink (initially with placeholder connection params)
-  UDPDataSink* udpSink = nullptr;
-
-  while (appRunning) {
-    // Check if we should connect
-    if (networkShouldConnect && !networkConnected) {
-      // Get connection parameters
-      std::string ip;
-      int port;
-      {
-        std::lock_guard<std::mutex> lock(networkConfigMutex);
-        ip = networkIP;
-        port = networkPort;
-      }
-
-      // Create new UDP data sink with current connection params
-      // Pass LuaScriptManager for Lua packet parsing support
-      udpSink = new UDPDataSink(signalRegistry, packets, ip, port, &logFile, &logFileMutex, &luaScriptManager);
-
-      if (udpSink->open()) {
-        networkConnected = true;
-
-        // Open log file
-        {
-          std::lock_guard<std::mutex> lock(logFileMutex);
-          std::string filename = GenerateLogFilename();
-          logFile.open(filename, std::ios::binary);
-          if (logFile.is_open()) {
-            printf("Logging to file: %s\n", filename.c_str());
-          } else {
-            printf("Failed to open log file: %s\n", filename.c_str());
-          }
-        }
-      } else {
-        // Failed to connect
-        delete udpSink;
-        udpSink = nullptr;
-        networkShouldConnect = false;
-      }
-    }
-
-    // Check if we should disconnect
-    if (!networkShouldConnect && networkConnected) {
-      if (udpSink) {
-        udpSink->close();
-        delete udpSink;
-        udpSink = nullptr;
-      }
-      networkConnected = false;
-
-      // Close log file
-      {
-        std::lock_guard<std::mutex> lock(logFileMutex);
-        if (logFile.is_open()) {
-          logFile.close();
-          printf("Log file closed\n");
-        }
-      }
-    }
-
-    // Receive data if connected
-    if (networkConnected && udpSink) {
-      bool dataAvailable = true;
-
-      // Process all available packets before sleeping
-      // Lua callbacks are invoked automatically by UDPDataSink after each packet
-      while (dataAvailable && networkConnected) {
-        {
-          std::lock_guard<std::mutex> lock(stateMutex);
-          dataAvailable = udpSink->step();
-        }
-        // Release the mutex between packets to allow UI thread to access data
-      }
-
-      // Sleep briefly after processing all available packets
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    } else {
-      // Not connected, sleep to avoid busy-waiting
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-  }
-
-  // Cleanup on exit
-  if (udpSink) {
-    udpSink->close();
-    delete udpSink;
-  }
-}
+// All network I/O is now handled in Lua via scripts/io/UDPDataSink.lua
+// which runs as an on_frame() callback at ~60 FPS with non-blocking sockets.
+// This eliminates the need for a separate C++ network thread.
 
 //
 void SetupImGuiStyle() {
@@ -470,7 +348,6 @@ int main(int, char **) {
   // Scan available parsers for dropdown menu
   scanAvailableParsers(availableParsers);
 
-  std::thread receiver(NetworkReceiverThread);
   SDL_Event event;
   while (appRunning) {
     // Use SDL_WaitEventTimeout to reduce CPU usage when idle
@@ -486,8 +363,6 @@ int main(int, char **) {
 
     MainLoopStep(&ctx);
   }
-  if (receiver.joinable())
-    receiver.join();
 
   // Tier 5: Stop all Lua I/O threads before cleanup
   printf("Stopping Lua threads...\n");

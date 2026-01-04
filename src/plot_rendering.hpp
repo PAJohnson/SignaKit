@@ -15,17 +15,10 @@
 
 // Forward declarations for global state (defined in main.cpp)
 extern std::atomic<bool> appRunning;
-extern std::atomic<bool> networkConnected;
-extern std::atomic<bool> networkShouldConnect;
-extern std::mutex networkConfigMutex;
-extern std::string networkIP;
-extern int networkPort;
 extern PlaybackMode currentPlaybackMode;
 extern OfflinePlaybackState offlineState;
 extern std::map<std::string, Signal> signalRegistry;
 extern LuaScriptManager luaScriptManager;
-extern std::ofstream logFile;
-extern std::mutex logFileMutex;
 extern std::vector<std::string> availableParsers;
 
 // -------------------------------------------------------------------------
@@ -106,18 +99,6 @@ inline void CaptureWindowPositionAndSize(WindowType& window) {
 // -------------------------------------------------------------------------
 
 inline void RenderMenuBar(UIPlotState& uiPlotState) {
-  static char ipBuffer[64] = "localhost";
-  static char portBuffer[16] = "5000";
-  static bool buffersInitialized = false;
-
-  // Initialize buffers once with current values
-  if (!buffersInitialized) {
-    std::lock_guard<std::mutex> lock(networkConfigMutex);
-    strncpy(ipBuffer, networkIP.c_str(), sizeof(ipBuffer) - 1);
-    snprintf(portBuffer, sizeof(portBuffer), "%d", networkPort);
-    buffersInitialized = true;
-  }
-
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("Menu")) {
       if (ImGui::MenuItem("Save Layout")) {
@@ -212,14 +193,9 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
         currentPlaybackMode = PlaybackMode::ONLINE;
         offlineState.fileLoaded = false;
 
-        // Disconnect network if connected
-        if (networkConnected.load()) {
-          networkShouldConnect = false;
-        }
-
         // Clear and reinitialize signal registry for online mode
         signalRegistry.clear();
-        // Signals will be reinitialized by network thread
+        // Note: Network connection is now managed in Lua via UDPDataSink.lua
       }
     }
     ImGui::SameLine();
@@ -227,11 +203,7 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
       if (isOnline) {
         // Switching to offline mode
         currentPlaybackMode = PlaybackMode::OFFLINE;
-
-        // Disconnect network if connected
-        if (networkConnected.load()) {
-          networkShouldConnect = false;
-        }
+        // Note: Network disconnection is now managed in Lua via UDPDataSink.lua
       }
     }
 
@@ -239,37 +211,10 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
 
     // Conditional UI based on mode
     if (currentPlaybackMode == PlaybackMode::ONLINE) {
-      // IP input
-      ImGui::Text("IP:");
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(150);
-      ImGui::InputText("##IP", ipBuffer, sizeof(ipBuffer));
-
-      // Port input
-      ImGui::SameLine();
-      ImGui::Text("Port:");
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(80);
-      ImGui::InputText("##Port", portBuffer, sizeof(portBuffer), ImGuiInputTextFlags_CharsDecimal);
-
-      // Connect/Disconnect button
-      ImGui::SameLine();
-      bool isConnected = networkConnected.load();
-      const char* buttonText = isConnected ? "Disconnect" : "Connect";
-      if (ImGui::Button(buttonText)) {
-        if (isConnected) {
-          // Disconnect
-          networkShouldConnect = false;
-        } else {
-          // Update connection parameters and connect
-          {
-            std::lock_guard<std::mutex> lock(networkConfigMutex);
-            networkIP = std::string(ipBuffer);
-            networkPort = atoi(portBuffer);
-          }
-          networkShouldConnect = true;
-        }
-      }
+      // Online mode: Network controls are now in Lua scripts
+      // Users can create control windows with text inputs and buttons
+      // that the UDPDataSink.lua script will use for connection management
+      ImGui::TextDisabled("Network connection managed via Lua scripts");
     } else {
       // Offline mode: Open File button
       if (ImGui::Button("Open Log File")) {
