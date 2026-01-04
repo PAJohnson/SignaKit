@@ -103,6 +103,61 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(sol2)
 
+# Fetch LuaSocket for network I/O in Lua scripts
+message(STATUS "Fetching LuaSocket for Lua network I/O...")
+FetchContent_Declare(
+    luasocket
+    GIT_REPOSITORY https://github.com/lunarmodules/luasocket.git
+    GIT_TAG v3.1.0
+)
+FetchContent_GetProperties(luasocket)
+if(NOT luasocket_POPULATED)
+    FetchContent_Populate(luasocket)
+
+    # Build LuaSocket as static library
+    set(LUASOCKET_SRC_DIR ${luasocket_SOURCE_DIR}/src)
+
+    # LuaSocket core sources
+    set(LUASOCKET_CORE_SOURCES
+        ${LUASOCKET_SRC_DIR}/luasocket.c
+        ${LUASOCKET_SRC_DIR}/timeout.c
+        ${LUASOCKET_SRC_DIR}/buffer.c
+        ${LUASOCKET_SRC_DIR}/io.c
+        ${LUASOCKET_SRC_DIR}/auxiliar.c
+        ${LUASOCKET_SRC_DIR}/options.c
+        ${LUASOCKET_SRC_DIR}/inet.c
+        ${LUASOCKET_SRC_DIR}/except.c
+        ${LUASOCKET_SRC_DIR}/select.c
+        ${LUASOCKET_SRC_DIR}/tcp.c
+        ${LUASOCKET_SRC_DIR}/udp.c
+        ${LUASOCKET_SRC_DIR}/compat.c
+    )
+
+    # Windows-specific sources
+    if(WIN32)
+        list(APPEND LUASOCKET_CORE_SOURCES ${LUASOCKET_SRC_DIR}/wsocket.c)
+    else()
+        list(APPEND LUASOCKET_CORE_SOURCES ${LUASOCKET_SRC_DIR}/usocket.c)
+    endif()
+
+    # Create static library for LuaSocket
+    add_library(luasocket_static STATIC ${LUASOCKET_CORE_SOURCES})
+    target_include_directories(luasocket_static PUBLIC ${LUASOCKET_SRC_DIR} ${LUA_INCLUDE_DIR})
+
+    # Define LUASOCKET_API as empty for static linking (no dllexport/dllimport)
+    target_compile_definitions(luasocket_static PRIVATE LUASOCKET_API=)
+
+    # Link against Lua
+    target_link_libraries(luasocket_static PUBLIC ${LUA_LIBRARIES})
+
+    # Windows needs winsock
+    if(WIN32)
+        target_link_libraries(luasocket_static PUBLIC ws2_32)
+    endif()
+
+    message(STATUS "LuaSocket configured for static linking")
+endif()
+
 # ImGui Sources
 set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui.cpp
@@ -173,6 +228,7 @@ target_link_libraries(telemetry_gui PRIVATE
     yaml-cpp
     sol2::sol2
     ${LUA_LIBRARIES}
+    luasocket_static
 )
 
 # Static linking for portability

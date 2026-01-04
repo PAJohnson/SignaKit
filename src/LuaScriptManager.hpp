@@ -10,8 +10,16 @@
 #include <sstream>
 #include <iomanip>
 #include <cstring>
+#include <thread>
+#include <atomic>
+#include <chrono>
 #include "types.hpp"
 #include "ui_state.hpp"
+
+// LuaSocket C API declarations
+extern "C" {
+    int luaopen_socket_core(lua_State* L);
+}
 
 namespace fs = std::filesystem;
 
@@ -165,6 +173,53 @@ public:
         lua.set_function("on_cleanup", [this](sol::protected_function func) {
             cleanupCallbacks.push_back(func);
             printf("[LuaScriptManager] Registered cleanup callback\n");
+        });
+
+        // Tier 5: LuaSocket Integration
+        // Register LuaSocket core module
+        lua.require("socket.core", luaopen_socket_core);
+
+        // Load socket.lua wrapper (provides socket.udp(), socket.tcp(), etc.)
+        // This is a simple Lua wrapper that we'll define inline
+        lua.script(R"(
+            socket = require("socket.core")
+
+            -- Simplified socket.udp() wrapper
+            function socket.udp()
+                return socket.core.udp()
+            end
+
+            -- Simplified socket.tcp() wrapper
+            function socket.tcp()
+                return socket.core.tcp()
+            end
+
+            -- Version info
+            socket._VERSION = "LuaSocket 3.1.0"
+        )");
+
+        // Tier 5: Lua Threading API
+        lua.set_function("create_thread", [this](sol::protected_function func) -> int {
+            return createLuaThread(func);
+        });
+
+        lua.set_function("stop_thread", [this](int threadId) {
+            stopLuaThread(threadId);
+        });
+
+        lua.set_function("sleep_ms", [this](int milliseconds) {
+            sleepMs(milliseconds);
+        });
+
+        lua.set_function("is_app_running", [this]() -> bool {
+            return isAppRunning();
+        });
+
+        // Tier 5: Timing API
+        lua.set_function("get_time_seconds", []() -> double {
+            return std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch()
+            ).count();
         });
     }
 
@@ -431,6 +486,25 @@ public:
         return handled;
     }
 
+    // Tier 5: Thread management functions (PUBLIC)
+    void setAppRunningPtr(std::atomic<bool>* ptr) {
+        appRunningPtr = ptr;
+    }
+
+    void stopAllLuaThreads() {
+        printf("[LuaScriptManager] Stopping all Lua threads...\n");
+        threadsRunning = false;
+
+        std::lock_guard<std::mutex> lock(threadVectorMutex);
+        for (auto& luaThread : luaThreads) {
+            if (luaThread->thread.joinable()) {
+                luaThread->thread.join();
+            }
+        }
+        luaThreads.clear();
+        printf("[LuaScriptManager] All Lua threads stopped\n");
+    }
+
 private:
     sol::state lua;
     std::vector<LuaScript> scripts;
@@ -470,6 +544,24 @@ private:
 
     // Tier 4: Pointer to UI state for control element access (set during executeFrameCallbacks)
     UIPlotState* currentUIPlotState = nullptr;
+
+    // Tier 5: Lua thread management
+    struct LuaThread {
+        int id;
+        std::thread thread;
+        sol::state luaState;  // Each thread gets its own Lua state
+        std::string funcBytecode;  // Store function as bytecode to transfer between states
+
+        LuaThread(int threadId, const std::string& bytecode)
+            : id(threadId), funcBytecode(bytecode) {}
+    };
+    std::vector<std::unique_ptr<LuaThread>> luaThreads;
+    std::atomic<int> nextThreadId{0};
+    std::atomic<bool> threadsRunning{true};
+    std::mutex threadVectorMutex;
+
+    // Pointer to global appRunning atomic (set from main.cpp)
+    std::atomic<bool>* appRunningPtr = nullptr;
 
     // Helper functions for endianness conversion
     template<typename T>
@@ -828,5 +920,220 @@ private:
     void registerPacketParser(const std::string& parserName, sol::protected_function func) {
         packetParsers.push_back({parserName, func});
         printf("[LuaScriptManager] Registered packet parser: %s\n", parserName.c_str());
+    }
+
+    // Tier 5: Private thread management methods
+    int createLuaThread(sol::protected_function func) {
+        std::lock_guard<std::mutex> lock(threadVectorMutex);
+
+        // Dump the function to bytecode using string.dump
+        std::string bytecode;
+        try {
+            sol::function stringDump = lua["string"]["dump"];
+            bytecode = stringDump(func);
+        } catch (const std::exception& e) {
+            printf("[LuaScriptManager] Error: Failed to serialize function: %s\n", e.what());
+            return -1;
+        }
+
+        int threadId = nextThreadId++;
+        auto luaThread = std::make_unique<LuaThread>(threadId, bytecode);
+
+        // Initialize the thread's Lua state with necessary APIs
+        luaThread->luaState.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string,
+                                            sol::lib::table, sol::lib::io, sol::lib::os, sol::lib::package);
+
+        // Register LuaSocket in the thread's Lua state
+        luaThread->luaState.require("socket.core", luaopen_socket_core);
+        luaThread->luaState.script(R"(
+            socket = require("socket.core")
+            function socket.udp() return socket.core.udp() end
+            function socket.tcp() return socket.core.tcp() end
+            socket._VERSION = "LuaSocket 3.1.0"
+        )");
+
+        // Register essential APIs in thread's Lua state
+        // Signal manipulation (thread-safe via stateMutex)
+        luaThread->luaState.set_function("update_signal", [this](const std::string& name, double timestamp, double value) {
+            if (currentSignalRegistry == nullptr) {
+                printf("[Lua Thread] Warning: Cannot update signal '%s' - no active signal registry\n", name.c_str());
+                return;
+            }
+            // Note: Caller must hold stateMutex before calling update_signal from thread
+            if (currentSignalRegistry->find(name) == currentSignalRegistry->end()) {
+                (*currentSignalRegistry)[name] = Signal(name, 2000, PlaybackMode::ONLINE);
+            }
+            Signal& sig = (*currentSignalRegistry)[name];
+            sig.AddPoint(timestamp, value);
+        });
+
+        luaThread->luaState.set_function("create_signal", [this](const std::string& name) {
+            if (currentSignalRegistry == nullptr) {
+                printf("[Lua Thread] Warning: Cannot create signal '%s' - no active signal registry\n", name.c_str());
+                return;
+            }
+            if (currentSignalRegistry->find(name) == currentSignalRegistry->end()) {
+                (*currentSignalRegistry)[name] = Signal(name, 2000, PlaybackMode::ONLINE);
+                printf("[Lua Thread] Created signal: %s\n", name.c_str());
+            }
+        });
+
+        // Buffer parsing APIs (copy from main state)
+        exposeBufferParsingAPIForState(luaThread->luaState);
+
+        // Control element APIs
+        luaThread->luaState.set_function("get_button_clicked", [this](const std::string& buttonTitle) -> bool {
+            if (currentUIPlotState == nullptr) return false;
+            for (const auto& button : currentUIPlotState->activeButtons) {
+                if (button.title == buttonTitle) return button.clicked;
+            }
+            return false;
+        });
+
+        luaThread->luaState.set_function("get_text_input", [this](const std::string& inputTitle) -> sol::optional<std::string> {
+            if (currentUIPlotState == nullptr) return sol::nullopt;
+            for (const auto& textInput : currentUIPlotState->activeTextInputs) {
+                if (textInput.title == inputTitle) return std::string(textInput.textBuffer);
+            }
+            return sol::nullopt;
+        });
+
+        // Utility functions
+        luaThread->luaState.set_function("sleep_ms", [](int milliseconds) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+        });
+
+        luaThread->luaState.set_function("is_app_running", [this]() -> bool {
+            return appRunningPtr ? appRunningPtr->load() : false;
+        });
+
+        luaThread->luaState.set_function("get_time_seconds", []() -> double {
+            return std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch()
+            ).count();
+        });
+
+        luaThread->luaState.set_function("log", [](const std::string& message) {
+            printf("[Lua Thread] %s\n", message.c_str());
+        });
+
+                // Toggle controls
+        luaThread->luaState.set_function("get_toggle_state", [this](const std::string& toggleTitle) -> bool {
+            if (currentUIPlotState == nullptr) return false;
+            for (const auto& toggle : currentUIPlotState->activeToggles) {
+                if (toggle.title == toggleTitle) {
+                    return toggle.state;
+                }
+            }
+            return false;
+        });
+
+        luaThread->luaState.set_function("set_toggle_state", [this](const std::string& toggleTitle, bool state) {
+            if (currentUIPlotState == nullptr) return;
+            for (auto& toggle : currentUIPlotState->activeToggles) {
+                if (toggle.title == toggleTitle) {
+                    toggle.state = state;
+                    return;
+                }
+            }
+        });
+
+        // Create the actual thread
+        luaThread->thread = std::thread([this, threadId, func]() {
+            printf("[LuaScriptManager] Lua thread %d started\n", threadId);
+
+            // Find this thread's Lua state
+            LuaThread* myThread = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(threadVectorMutex);
+                for (auto& t : luaThreads) {
+                    if (t->id == threadId) {
+                        myThread = t.get();
+                        break;
+                    }
+                }
+            }
+
+            if (!myThread) {
+                printf("[LuaScriptManager] Error: Could not find thread %d\n", threadId);
+                return;
+            }
+
+            // Load and execute the Lua function bytecode in this thread's context
+            try {
+                // Load the bytecode into a function
+                sol::function loadFunc = myThread->luaState["load"];
+                sol::protected_function threadFunc = loadFunc(myThread->funcBytecode);
+
+                if (!threadFunc.valid()) {
+                    printf("[LuaScriptManager] Thread %d error: Failed to load function bytecode\n", threadId);
+                    return;
+                }
+
+                // Execute the function
+                auto result = threadFunc();
+                if (!result.valid()) {
+                    sol::error err = result;
+                    printf("[LuaScriptManager] Thread %d error: %s\n", threadId, err.what());
+                }
+            } catch (const std::exception& e) {
+                printf("[LuaScriptManager] Thread %d exception: %s\n", threadId, e.what());
+            }
+
+            printf("[LuaScriptManager] Lua thread %d finished\n", threadId);
+        });
+
+        luaThreads.push_back(std::move(luaThread));
+        printf("[LuaScriptManager] Created Lua thread %d (total: %zu)\n", threadId, luaThreads.size());
+
+        return threadId;
+    }
+
+    void stopLuaThread(int threadId) {
+        std::lock_guard<std::mutex> lock(threadVectorMutex);
+
+        for (auto it = luaThreads.begin(); it != luaThreads.end(); ++it) {
+            if ((*it)->id == threadId) {
+                if ((*it)->thread.joinable()) {
+                    (*it)->thread.join();
+                }
+                luaThreads.erase(it);
+                // printf("[LuaScriptManager] Stopped Lua thread %d\n", threadId);
+                return;
+            }
+        }
+
+        printf("[LuaScriptManager] Warning: Thread %d not found\n", threadId);
+    }
+
+    void sleepMs(int milliseconds) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+    }
+
+    bool isAppRunning() {
+        return appRunningPtr ? appRunningPtr->load() : false;
+    }
+
+    // Helper to expose buffer parsing API to a specific Lua state
+    void exposeBufferParsingAPIForState(sol::state& luaState) {
+        // Simplified version - just expose the essential buffer reading functions
+        luaState.set_function("readUInt8", [](const std::string& buffer, size_t offset) -> sol::optional<uint8_t> {
+            if (offset >= buffer.size()) return sol::nullopt;
+            return static_cast<uint8_t>(buffer[offset]);
+        });
+
+        luaState.set_function("readUInt16", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<uint16_t> {
+            return readNumeric<uint16_t>(buffer, offset, littleEndian.value_or(true));
+        });
+
+        luaState.set_function("readDouble", [this](const std::string& buffer, size_t offset, sol::optional<bool> littleEndian) -> sol::optional<double> {
+            if (offset + sizeof(double) > buffer.size()) return sol::nullopt;
+            uint64_t bits = readNumeric<uint64_t>(buffer, offset, littleEndian.value_or(true)).value_or(0);
+            double value;
+            std::memcpy(&value, &bits, sizeof(double));
+            return value;
+        });
+
+        // Add other essential buffer functions as needed
     }
 };

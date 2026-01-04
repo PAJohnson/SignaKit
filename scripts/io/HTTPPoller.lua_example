@@ -1,0 +1,148 @@
+-- Tier 5: HTTP Polling Example
+-- Polls a REST API endpoint at regular intervals
+-- Demonstrates HTTP-based telemetry ingestion
+
+print("========================================")
+print("HTTPPoller.lua - REST API polling example")
+print("========================================")
+
+local socket = require("socket")
+
+-- Configuration
+local API_URL = "http://api.example.com/telemetry"  -- Change to your API endpoint
+local POLL_INTERVAL = 1.0  -- seconds
+local REQUEST_TIMEOUT = 5.0  -- seconds
+
+-- Simple HTTP GET implementation using LuaSocket
+local function http_get(url)
+    -- Parse URL (simplified - assumes http://host:port/path format)
+    local protocol, host, port, path = url:match("^(%w+)://([^:/]+):?(%d*)(/?.*)$")
+
+    if not host then
+        -- Try without port
+        protocol, host, path = url:match("^(%w+)://([^/]+)(/?.*)$")
+        port = "80"
+    end
+
+    if not host then
+        return nil, "Invalid URL format"
+    end
+
+    port = tonumber(port) or 80
+    if path == "" then
+        path = "/"
+    end
+
+    -- Create TCP connection
+    local tcp, err = socket.tcp()
+    if not tcp then
+        return nil, "Failed to create socket: " .. tostring(err)
+    end
+
+    tcp:settimeout(REQUEST_TIMEOUT)
+
+    -- Connect to server
+    local success, connectErr = tcp:connect(host, port)
+    if not success then
+        tcp:close()
+        return nil, "Connection failed: " .. tostring(connectErr)
+    end
+
+    -- Send HTTP GET request
+    local request = string.format(
+        "GET %s HTTP/1.1\r\n" ..
+        "Host: %s\r\n" ..
+        "Connection: close\r\n" ..
+        "\r\n",
+        path, host
+    )
+
+    tcp:send(request)
+
+    -- Read response
+    local response = ""
+    while true do
+        local chunk, recvErr = tcp:receive("*a")
+        if chunk then
+            response = response .. chunk
+        end
+        if recvErr == "closed" then
+            break
+        elseif recvErr then
+            tcp:close()
+            return nil, "Receive error: " .. tostring(recvErr)
+        end
+    end
+
+    tcp:close()
+
+    -- Parse response (simplified - just extract body)
+    local bodyStart = response:find("\r\n\r\n")
+    if bodyStart then
+        local body = response:sub(bodyStart + 4)
+        return body
+    else
+        return response
+    end
+end
+
+-- Main polling loop
+local function polling_loop()
+    print("[HTTPPoller] Polling thread started")
+    print(string.format("[HTTPPoller] Polling %s every %.1f seconds", API_URL, POLL_INTERVAL))
+
+    local pollCount = 0
+    local errorCount = 0
+
+    while is_app_running() do
+        local startTime = get_time_seconds()
+
+        -- Make HTTP GET request
+        local body, err = http_get(API_URL)
+
+        if body then
+            pollCount = pollCount + 1
+            print(string.format("[HTTPPoller] Poll #%d successful (%d bytes)", pollCount, #body))
+
+            -- Parse response and update signals
+            -- Example: Assuming JSON response like {"timestamp": 123.456, "value": 42.0}
+
+            -- For actual JSON parsing, you would need a JSON library:
+            -- local json = require("cjson") or require("dkjson")
+            -- local data = json.decode(body)
+            -- if data and data.timestamp and data.value then
+            --     update_signal("api.value", data.timestamp, data.value)
+            -- end
+
+            -- Simplified example: Just log the response
+            if #body < 200 then
+                print("[HTTPPoller] Response: " .. body)
+            end
+        else
+            errorCount = errorCount + 1
+            print(string.format("[HTTPPoller] Error (total: %d): %s", errorCount, err))
+        end
+
+        -- Calculate sleep time to maintain poll interval
+        local elapsed = get_time_seconds() - startTime
+        local sleepTime = POLL_INTERVAL - elapsed
+        if sleepTime > 0 then
+            sleep_ms(math.floor(sleepTime * 1000))
+        end
+    end
+
+    print("[HTTPPoller] Polling thread exiting")
+end
+
+-- Cleanup handler
+on_cleanup(function()
+    print("[HTTPPoller] Cleanup called")
+end)
+
+-- Start polling thread
+print("[HTTPPoller] Starting polling thread...")
+create_thread(polling_loop)
+print("[HTTPPoller] Script loaded")
+print("")
+print("NOTE: This is an example script. Edit the API_URL variable to point to your API endpoint.")
+print("For production use, consider using lua-http or lua-requests library for more robust HTTP support.")

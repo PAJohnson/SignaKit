@@ -469,6 +469,7 @@ int main(int, char **) {
 
   // Load Lua scripts from scripts/ directory
   printf("Loading Lua scripts...\n");
+  luaScriptManager.setAppRunningPtr(&appRunning);  // Tier 5: Allow Lua threads to check app status
   luaScriptManager.loadScriptsFromDirectory("scripts");
 
   // Scan available parsers for dropdown menu
@@ -492,6 +493,10 @@ int main(int, char **) {
   }
   if (receiver.joinable())
     receiver.join();
+
+  // Tier 5: Stop all Lua I/O threads before cleanup
+  printf("Stopping Lua threads...\n");
+  luaScriptManager.stopAllLuaThreads();
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplSDL2_Shutdown();

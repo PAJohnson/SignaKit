@@ -1,0 +1,131 @@
+-- Tier 5: TCP Data Sink Example
+-- Demonstrates TCP streaming telemetry reception
+-- This is a template - customize for your specific TCP protocol
+
+print("========================================")
+print("TCPDataSink.lua - TCP streaming example")
+print("========================================")
+
+local socket = require("socket")
+
+-- Configuration
+local TCP_SERVER = "192.168.1.100"  -- Change to your server address
+local TCP_PORT = 8080
+local RECONNECT_DELAY = 5.0  -- seconds
+
+-- State
+local tcpSocket = nil
+local connected = false
+local lastReconnectAttempt = 0
+
+-- Connect to TCP server
+local function connect()
+    if connected then
+        return true
+    end
+
+    print(string.format("[TCPDataSink] Connecting to %s:%d", TCP_SERVER, TCP_PORT))
+
+    local tcp, err = socket.tcp()
+    if not tcp then
+        print("[TCPDataSink] Failed to create TCP socket: " .. tostring(err))
+        return false
+    end
+
+    -- Set timeouts
+    tcp:settimeout(5)  -- 5 second connection timeout
+
+    -- Connect to server
+    local success, connectErr = tcp:connect(TCP_SERVER, TCP_PORT)
+    if not success then
+        print("[TCPDataSink] Connection failed: " .. tostring(connectErr))
+        tcp:close()
+        return false
+    end
+
+    -- Set non-blocking mode after connection
+    tcp:settimeout(0)
+
+    tcpSocket = tcp
+    connected = true
+    print("[TCPDataSink] Connected successfully")
+    return true
+end
+
+-- Disconnect
+local function disconnect()
+    if tcpSocket then
+        tcpSocket:close()
+        tcpSocket = nil
+    end
+    connected = false
+    print("[TCPDataSink] Disconnected")
+end
+
+-- Main I/O loop
+local function io_loop()
+    print("[TCPDataSink] I/O thread started")
+
+    local buffer = ""  -- Accumulate partial packets
+
+    while is_app_running() do
+        -- Auto-reconnect logic
+        if not connected then
+            local currentTime = get_time_seconds()
+            if (currentTime - lastReconnectAttempt) >= RECONNECT_DELAY then
+                connect()
+                lastReconnectAttempt = currentTime
+            end
+            sleep_ms(100)
+        else
+            -- Read from TCP stream
+            local data, err = tcpSocket:receive("*a")  -- Receive all available data
+
+            if data and #data > 0 then
+                buffer = buffer .. data
+
+                -- Parse complete packets from buffer
+                -- Example: Assuming packets are newline-delimited JSON
+                while true do
+                    local newlinePos = buffer:find("\n")
+                    if not newlinePos then
+                        break  -- No complete packet yet
+                    end
+
+                    local packet = buffer:sub(1, newlinePos - 1)
+                    buffer = buffer:sub(newlinePos + 1)
+
+                    -- Process packet (customize for your protocol)
+                    print("[TCPDataSink] Received: " .. packet)
+
+                    -- Example: Parse JSON packet
+                    -- local json = require("cjson")
+                    -- local data = json.decode(packet)
+                    -- update_signal("tcp.value", get_time_seconds(), data.value)
+                end
+
+                sleep_ms(1)
+            elseif err == "timeout" then
+                -- No data available
+                sleep_ms(10)
+            else
+                -- Connection error
+                print("[TCPDataSink] TCP error: " .. tostring(err))
+                disconnect()
+            end
+        end
+    end
+
+    disconnect()
+    print("[TCPDataSink] I/O thread exiting")
+end
+
+-- Cleanup handler
+on_cleanup(function()
+    disconnect()
+end)
+
+-- Start I/O thread
+print("[TCPDataSink] Starting I/O thread...")
+create_thread(io_loop)
+print("[TCPDataSink] Script loaded")

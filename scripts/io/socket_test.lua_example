@@ -1,0 +1,66 @@
+-- Tier 5: LuaSocket validation test
+-- This script tests that LuaSocket is properly integrated and functional
+
+print("========================================")
+print("LuaSocket Integration Test")
+print("========================================")
+
+-- Test 1: Check if socket module is available
+local socket_success, socket = pcall(require, "socket")
+if not socket_success then
+    print("❌ FAILED: Could not load socket module")
+    print("   Error: " .. tostring(socket))
+    return
+end
+print("✓ Socket module loaded successfully")
+
+-- Test 2: Check version
+if socket._VERSION then
+    print("✓ LuaSocket version: " .. socket._VERSION)
+else
+    print("⚠ Warning: Socket version not available")
+end
+
+-- Test 3: Create UDP socket
+local udp_success, udp = pcall(socket.udp)
+if not udp_success or not udp then
+    print("❌ FAILED: Could not create UDP socket")
+    print("   Error: " .. tostring(udp))
+    return
+end
+print("✓ UDP socket created successfully")
+
+-- Test 4: Test UDP socket methods
+if type(udp.setsockname) ~= "function" then
+    print("❌ FAILED: UDP socket missing setsockname method")
+    udp:close()
+    return
+end
+print("✓ UDP socket has required methods")
+
+-- Test 5: Close UDP socket
+local close_success, close_err = pcall(function() udp:close() end)
+if not close_success then
+    print("❌ FAILED: Could not close UDP socket")
+    print("   Error: " .. tostring(close_err))
+    return
+end
+print("✓ UDP socket closed successfully")
+
+-- Test 6: Create TCP socket
+local tcp_success, tcp = pcall(socket.tcp)
+if not tcp_success or not tcp then
+    print("❌ FAILED: Could not create TCP socket")
+    print("   Error: " .. tostring(tcp))
+    return
+end
+print("✓ TCP socket created successfully")
+
+-- Test 7: Close TCP socket
+tcp:close()
+print("✓ TCP socket closed successfully")
+
+print("========================================")
+print("✓ ALL TESTS PASSED!")
+print("LuaSocket is properly integrated")
+print("========================================")
