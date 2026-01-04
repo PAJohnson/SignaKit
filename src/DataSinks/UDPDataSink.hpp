@@ -123,7 +123,15 @@ public:
         // Try Lua parsers first (Tier 2 feature)
         bool parsedByLua = false;
         if (luaManager) {
-            parsedByLua = luaManager->parsePacket(buffer, len, signalRegistry);
+            // Get selected parser (thread-safe)
+            std::string activeParser;
+            {
+                extern std::mutex parserSelectionMutex;
+                extern std::string selectedParser;
+                std::lock_guard<std::mutex> lock(parserSelectionMutex);
+                activeParser = selectedParser;
+            }
+            parsedByLua = luaManager->parsePacket(buffer, len, signalRegistry, PlaybackMode::ONLINE, activeParser);
         }
 
         // // Fall back to legacy C++ parsing if no Lua parser handled it

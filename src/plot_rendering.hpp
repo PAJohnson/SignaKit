@@ -26,6 +26,32 @@ extern std::map<std::string, Signal> signalRegistry;
 extern LuaScriptManager luaScriptManager;
 extern std::ofstream logFile;
 extern std::mutex logFileMutex;
+extern std::vector<std::string> availableParsers;
+
+// -------------------------------------------------------------------------
+// PARSER SELECTION HELPERS
+// -------------------------------------------------------------------------
+void scanAvailableParsers(std::vector<std::string>& availableParsers) {
+  availableParsers.clear();
+
+  std::string parsersPath = "scripts/parsers";
+  if (!std::filesystem::exists(parsersPath)) {
+    printf("[ParserSelection] Parsers directory not found: %s\n", parsersPath.c_str());
+    return;
+  }
+
+  for (const auto& entry : std::filesystem::directory_iterator(parsersPath)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".lua") {
+      std::string parserName = entry.path().stem().string();
+      availableParsers.push_back(parserName);
+    }
+  }
+
+  // Sort alphabetically for consistent ordering
+  std::sort(availableParsers.begin(), availableParsers.end());
+
+  printf("[ParserSelection] Found %zu parsers\n", availableParsers.size());
+}
 
 // -------------------------------------------------------------------------
 // MENU BAR RENDERING
@@ -66,6 +92,7 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
     if (ImGui::BeginMenu("Scripts")) {
       if (ImGui::MenuItem("Reload All Scripts")) {
         luaScriptManager.reloadAllScripts();
+        scanAvailableParsers(availableParsers);  // Rescan parsers after reload
       }
       if (ImGui::MenuItem("Load Script...")) {
         IGFD::FileDialogConfig config;
@@ -99,6 +126,31 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
 
     // Add spacing
     ImGui::Separator();
+
+    // Parser Selection
+    ImGui::Text("Parser:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(150);
+    {
+      std::lock_guard<std::mutex> lock(parserSelectionMutex);
+      if (ImGui::BeginCombo("##ParserSelect", selectedParser.c_str())) {
+        for (const auto& parser : availableParsers) {
+          bool isSelected = (selectedParser == parser);
+          if (ImGui::Selectable(parser.c_str(), isSelected)) {
+            selectedParser = parser;
+            printf("[ParserSelection] Selected parser: %s\n", selectedParser.c_str());
+          }
+          if (isSelected) {
+            ImGui::SetItemDefaultFocus();
+          }
+        }
+        ImGui::EndCombo();
+      }
+    }
+
+    ImGui::SameLine();
+    ImGui::Separator();
+    ImGui::SameLine();
 
     // Online/Offline Mode Toggle
     ImGui::Text("Mode:");

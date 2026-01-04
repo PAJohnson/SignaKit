@@ -5,12 +5,13 @@
 #include "ImGuiFileDialog.h"
 #include <SDL.h>
 #include <SDL_opengl.h>
-#include <algorithm> // For std::find
+#include <algorithm> // For std::find, std::sort
 #include <atomic>
 #include <chrono>
 #include <cmath> // For FFT functions
 #include <cstdint>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -67,6 +68,11 @@ int networkPort = UDP_PORT;
 // Data logging state
 std::ofstream logFile;
 std::mutex logFileMutex;
+
+// Parser selection state
+std::vector<std::string> availableParsers;
+std::string selectedParser = "legacy_binary";
+std::mutex parserSelectionMutex;
 
 // Offline playback state
 struct OfflinePlaybackState {
@@ -433,6 +439,9 @@ int main(int, char **) {
   // Load Lua scripts from scripts/ directory
   printf("Loading Lua scripts...\n");
   luaScriptManager.loadScriptsFromDirectory("scripts");
+
+  // Scan available parsers for dropdown menu
+  scanAvailableParsers(availableParsers);
 
   std::thread receiver(NetworkReceiverThread);
   SDL_Event event;
