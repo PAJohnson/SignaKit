@@ -423,10 +423,40 @@ Control elements are saved/loaded with layouts:
 
 ---
 
-## Future Enhancements (Tier 5+)
+## Network I/O from Lua
 
-- **Network I/O from Lua**: Send control commands over UDP/Serial
-- **Timers**: Scheduled/periodic actions independent of frame rate
+You can implement network communication (UDP/Serial) entirely in Lua using external libraries like LuaSocket. Combined with control elements and frame callbacks, this enables complete command & control interfaces.
+
+**Important**: When using persistent resources like sockets or file handles, always use cleanup callbacks to prevent resource leaks on script reload. See [LuaCleanupCallbacks.md](LuaCleanupCallbacks.md) for details.
+
+**Example**: Simple UDP Command Sender
+```lua
+local socket = require("socket")
+local udp = socket.udp()
+udp:settimeout(0)
+
+-- IMPORTANT: Register cleanup to close socket on reload
+on_cleanup(function()
+    if udp then udp:close() end
+end)
+
+on_frame(function()
+    if get_button_clicked("Send Command") then
+        local cmd = get_text_input("Command Input")
+        if cmd then
+            udp:sendto(cmd, "192.168.1.100", 5000)
+            log("Sent: " .. cmd)
+            set_text_input("Command Input", "")  -- Clear input
+        end
+    end
+end)
+```
+
+---
+
+## Future Enhancements
+
+- **Timers**: Scheduled/periodic actions independent of frame rate (can be implemented in Lua with global state)
 - **Sliders**: Continuous numeric input controls
 - **Dropdowns**: Selection from predefined options
 
@@ -458,3 +488,4 @@ local state = get_toggle_state("My Toggle")
 - [LuaScripting.md](LuaScripting.md) - Tier 1: Signal Transforms
 - [LuaPacketParsing.md](LuaPacketParsing.md) - Tier 2: Packet Parsing
 - [LuaFrameCallbacks.md](LuaFrameCallbacks.md) - Tier 3: Frame Callbacks & Alerts
+- [LuaCleanupCallbacks.md](LuaCleanupCallbacks.md) - Tier 4.5: Resource Cleanup

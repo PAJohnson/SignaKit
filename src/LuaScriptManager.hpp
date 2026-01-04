@@ -160,6 +160,12 @@ public:
                 }
             }
         });
+
+        // Tier 4.5: Script lifecycle management - cleanup callbacks
+        lua.set_function("on_cleanup", [this](sol::protected_function func) {
+            cleanupCallbacks.push_back(func);
+            printf("[LuaScriptManager] Registered cleanup callback\n");
+        });
     }
 
     // Load a single script from file
@@ -228,11 +234,15 @@ public:
     void reloadAllScripts() {
         printf("[LuaScriptManager] Reloading all scripts...\n");
 
+        // Execute cleanup callbacks before clearing state
+        executeCleanupCallbacks();
+
         // Clear all callbacks and parsers (they'll be re-registered by scripts)
         packetCallbacks.clear();
         packetParsers.clear();
         frameCallbacks.clear();
         alerts.clear();
+        cleanupCallbacks.clear();
 
         // Reinitialize Lua state
         initializeLuaState();
@@ -337,6 +347,22 @@ public:
         currentUIPlotState = nullptr;
     }
 
+    // Tier 4.5: Execute cleanup callbacks (called before script reload/unload)
+    void executeCleanupCallbacks() {
+        printf("[LuaScriptManager] Executing %zu cleanup callback(s)...\n", cleanupCallbacks.size());
+        for (auto& func : cleanupCallbacks) {
+            try {
+                auto result = func();
+                if (!result.valid()) {
+                    sol::error err = result;
+                    printf("[LuaScriptManager] Cleanup callback error: %s\n", err.what());
+                }
+            } catch (const std::exception& e) {
+                printf("[LuaScriptManager] Exception in cleanup callback: %s\n", e.what());
+            }
+        }
+    }
+
     // Get list of loaded scripts
     const std::vector<LuaScript>& getScripts() const {
         return scripts;
@@ -417,6 +443,9 @@ private:
 
     // Tier 3: Frame callbacks
     std::vector<sol::protected_function> frameCallbacks;
+
+    // Tier 4.5: Cleanup callbacks (called before script reload/unload)
+    std::vector<sol::protected_function> cleanupCallbacks;
 
     // Tier 3: Alert monitoring
     struct Alert {
