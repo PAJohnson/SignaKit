@@ -192,7 +192,7 @@ scripts/
 
 **Status**: ✅ **PRODUCTION READY** - All features complete with examples and documentation.
 
-### 🔄 TODO: Tier 4 - GUI Control Elements
+### ✅ COMPLETED: Tier 4 - GUI Control Elements
 - Similar to the "Add New..." Plot creation interface, it should be possible to create Buttons, Toggles, and Text Input Boxes.
 - All of those GUI Control Elements should have their state exposed for Lua Frame Callbacks (the ones that run at the end of the GUI loop).
 - It should be possible to rename the title of an element. For example, when a new button is added, it might default to something like this visually:
@@ -212,6 +212,8 @@ _________________________________
 The user should be able to right click on "Button 1" and be able to type in the area, then hit enter to set the name of the button. Same thing for "Click me!"
 - The default naming/renaming ability needs to be possible for text input areas and toggles.
 - The intent is that the User can create dynamic control portions of the GUI. For example, a text input might be labeled "PID P Gain", and when a Button called "Send Gains" is clicked, a Frame Callback runs that then checks for the state of the button "Clicked" and parses the value in the "PID P Gain" text area, then sends that gain to a device over Serial or UDP or some other method (Handling of comms from Lua to be figured out later)
+
+**Status**: ✅ **PRODUCTION READY** - All features complete with examples and documentation.
 
 ### 🔄 TODO: Tier 5 - Total Luafication
 
