@@ -135,25 +135,52 @@ public:
         // Expose the signal registry API
         exposeSignalAPI();
 
-        // Expose packet callback registration API
-        // on_packet(packetType, outputName, function) - registers a callback for a specific packet
-        lua.set_function("on_packet", [this](const std::string& packetType, const std::string& outputName, sol::protected_function func) {
-            registerPacketCallback(packetType, outputName, func);
-        });
-
         // Expose packet parser registration API
         // register_parser(name, function) - registers a parser that receives (buffer, length) and returns true if handled
         lua.set_function("register_parser", [this](const std::string& parserName, sol::protected_function func) {
             registerPacketParser(parserName, func);
         });
 
-        // Expose function to trigger Tier 1 packet callbacks from Tier 2 parsers
-        // trigger_packet_callbacks(packetType) - triggers all on_packet() callbacks for a packet type
-        lua.set_function("trigger_packet_callbacks", [this](const std::string& packetType) {
-            if (currentSignalRegistry != nullptr) {
-                executePacketCallbacks(packetType, *currentSignalRegistry);
-            }
-        });
+        // Pure-Lua packet callback system (no C++ storage, eliminates context switches)
+        lua.script(R"(
+            -- Global registry of packet callbacks (stored in Lua, not C++)
+            -- Structure: _packet_callbacks[packetType] = { {outputName, func}, ... }
+            _packet_callbacks = {}
+
+            -- Register a packet callback
+            -- on_packet(packetType, outputName, function) - registers a callback for a specific packet
+            function on_packet(packetType, outputName, func)
+                if not _packet_callbacks[packetType] then
+                    _packet_callbacks[packetType] = {}
+                end
+                table.insert(_packet_callbacks[packetType], {
+                    outputName = outputName,
+                    callback = func
+                })
+                log("Registered packet callback: " .. packetType .. " -> " .. outputName)
+            end
+
+            -- Execute packet callbacks for a specific packet type
+            -- trigger_packet_callbacks(packetType, timestamp) - triggers all on_packet() callbacks
+            -- Called from parsers immediately after parsing a packet
+            function trigger_packet_callbacks(packetType, timestamp)
+                local callbacks = _packet_callbacks[packetType]
+                if not callbacks then
+                    return
+                end
+
+                -- Execute all callbacks for this packet type
+                for _, cb in ipairs(callbacks) do
+                    local success, result = pcall(cb.callback)
+                    if success and type(result) == "number" then
+                        -- Store the computed value in the output signal
+                        update_signal(cb.outputName, timestamp, result)
+                    elseif not success then
+                        log("Error in packet callback " .. cb.outputName .. ": " .. tostring(result))
+                    end
+                end
+            end
+        )");
 
         // Expose logging API
         lua.set_function("log", [](const std::string& message) {
@@ -282,9 +309,6 @@ public:
                 printf("[Lua] Warning: Cannot parse packet - no active signal registry\n");
                 return false;
             }
-            else {
-                printf("[Lua] currentSignalRegistry not null!\n");
-            }
             return parsePacket(buffer.c_str(), length, *currentSignalRegistry);
         });
 
@@ -374,7 +398,6 @@ public:
         executeCleanupCallbacks();
 
         // Clear all callbacks and parsers (they'll be re-registered by scripts)
-        packetCallbacks.clear();
         packetParsers.clear();
         frameCallbacks.clear();
         alerts.clear();
@@ -395,54 +418,6 @@ public:
         }
     }
 
-    // Execute packet callbacks for a specific packet type
-    // NOTE: Caller must hold stateMutex lock before calling this function
-    // packetType: e.g., "IMU", "GPS", "BAT"
-    void executePacketCallbacks(const std::string& packetType, std::map<std::string, Signal>& signalRegistry, PlaybackMode m = PlaybackMode::ONLINE) {
-        // Set the registry so Lua functions can access it
-        currentSignalRegistry = &signalRegistry;
-
-        // Get current timestamp from the packet's signals
-        double currentTime = getCurrentTimestamp(signalRegistry, packetType);
-
-        // Find all callbacks registered for this packet type
-        auto range = packetCallbacks.equal_range(packetType);
-        for (auto it = range.first; it != range.second; ++it) {
-            auto& [outputName, func] = it->second;
-
-            try {
-                auto result = func();
-                if (!result.valid()) {
-                    sol::error err = result;
-                    printf("[LuaScriptManager] Packet callback error for '%s' on packet '%s': %s\n",
-                           outputName.c_str(), packetType.c_str(), err.what());
-                    continue;
-                }
-
-                // Check if the function returned a value to store
-                if (result.return_count() > 0) {
-                    sol::object retVal = result;
-                    if (retVal.is<double>()) {
-                        double value = retVal.as<double>();
-
-                        // Get or create the output signal
-                        if (signalRegistry.find(outputName) == signalRegistry.end()) {
-                            signalRegistry[outputName] = Signal(outputName, 2000, m);
-                        }
-
-                        Signal& sig = signalRegistry[outputName];
-                        sig.AddPoint(currentTime, value);
-                    }
-                }
-            } catch (const std::exception& e) {
-                printf("[LuaScriptManager] Exception in packet callback '%s' on packet '%s': %s\n",
-                       outputName.c_str(), packetType.c_str(), e.what());
-            }
-        }
-
-        // Clear the registry pointer
-        // currentSignalRegistry = nullptr;
-    }
 
     // Tier 3: Execute frame callbacks every GUI render frame
     // NOTE: Caller must hold stateMutex lock before calling this function
@@ -590,9 +565,6 @@ private:
     sol::state lua;
     std::vector<LuaScript> scripts;
 
-    // Map: PacketType -> vector of (outputSignalName, luaCallback)
-    std::multimap<std::string, std::pair<std::string, sol::protected_function>> packetCallbacks;
-
     // Vector of registered packet parsers: (parserName, parserFunction)
     std::vector<std::pair<std::string, sol::protected_function>> packetParsers;
 
@@ -615,7 +587,7 @@ private:
     };
     std::vector<Alert> alerts;
 
-    // Pointer to signal registry (set during executePacketCallbacks and executeFrameCallbacks)
+    // Pointer to signal registry (set during executeFrameCallbacks)
     std::map<std::string, Signal>* currentSignalRegistry = nullptr;
 
     // Frame context (set during executeFrameCallbacks)
@@ -984,15 +956,6 @@ private:
                 printf("[LuaScriptManager] Exception in alert '%s': %s\n", alert.name.c_str(), e.what());
             }
         }
-    }
-
-    // Register a packet callback function
-    // packetType: e.g., "IMU", "GPS", "BAT"
-    // outputName: Name of the derived signal to create
-    // func: Lua function that computes the value
-    void registerPacketCallback(const std::string& packetType, const std::string& outputName, sol::protected_function func) {
-        packetCallbacks.insert({packetType, {outputName, func}});
-        printf("[LuaScriptManager] Registered packet callback for: %s -> %s\n", packetType.c_str(), outputName.c_str());
     }
 
     // Register a packet parser function

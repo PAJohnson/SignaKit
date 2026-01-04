@@ -118,8 +118,17 @@ inline bool LoadLogFile(const std::string &filename,
           if (t > maxTime) maxTime = t;
         }
 
-        // Execute Lua packet callbacks (NOTE: caller holds stateMutex)
-        luaScriptManager.executePacketCallbacks(pkt.id, signalRegistry, PlaybackMode::OFFLINE);
+        // Execute Lua packet callbacks via trigger_packet_callbacks() (NOTE: caller holds stateMutex)
+        // Get the timestamp from the first signal
+        double packetTime = 0.0;
+        if (!pkt.signals.empty()) {
+          packetTime = ReadValue(buffer, pkt.signals[0].timeType, pkt.signals[0].timeOffset);
+        }
+
+        // Call Lua trigger_packet_callbacks(packetType, timestamp)
+        luaScriptManager.getLuaState().safe_script(
+          "if trigger_packet_callbacks then trigger_packet_callbacks('" + pkt.id + "', " + std::to_string(packetTime) + ") end"
+        );
 
         packetsProcessed++;
         matched = true;

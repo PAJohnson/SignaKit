@@ -145,13 +145,8 @@ void NetworkReceiverThread() {
       }
 
       // Create new UDP data sink with current connection params
-      // Pass LuaScriptManager for Tier 2 packet parsing support
+      // Pass LuaScriptManager for Lua packet parsing support
       udpSink = new UDPDataSink(signalRegistry, packets, ip, port, &logFile, &logFileMutex, &luaScriptManager);
-
-      // Set Lua packet callback (Tier 1 feature - will be deprecated when fully migrated to Tier 2)
-      udpSink->setPacketCallback([](const std::string& packetType) {
-        luaScriptManager.executePacketCallbacks(packetType, signalRegistry);
-      });
 
       if (udpSink->open()) {
         networkConnected = true;
