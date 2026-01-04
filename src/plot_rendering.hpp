@@ -212,9 +212,6 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
     // Conditional UI based on mode
     if (currentPlaybackMode == PlaybackMode::ONLINE) {
       // Online mode: Network controls are now in Lua scripts
-      // Users can create control windows with text inputs and buttons
-      // that the UDPDataSink.lua script will use for connection management
-      ImGui::TextDisabled("Network connection managed via Lua scripts");
     } else {
       // Offline mode: Open File button
       if (ImGui::Button("Open Log File")) {

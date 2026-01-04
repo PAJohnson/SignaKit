@@ -70,6 +70,10 @@ inline bool RenderEditableText(const char* id, std::string& text, float fontSize
 // BUTTON CONTROL RENDERING
 // -------------------------------------------------------------------------
 inline void RenderButtonControls(UIPlotState& uiPlotState, float menuBarHeight) {
+  // Static buffers to preserve edit state between frames
+  static std::map<int, std::array<char, 256>> titleBuffers;
+  static std::map<int, std::array<char, 256>> labelBuffers;
+
   // Loop through all active button controls
   for (auto &button : uiPlotState.activeButtons) {
     if (!button.isOpen)
@@ -93,11 +97,23 @@ inline void RenderButtonControls(UIPlotState& uiPlotState, float menuBarHeight) 
       ImGui::Text("Title:");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(-1);
-      char titleBuffer[256];
-      strncpy(titleBuffer, button.title.c_str(), sizeof(titleBuffer) - 1);
-      titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-      if (ImGui::InputText(("##ButtonTitle" + std::to_string(button.id)).c_str(), titleBuffer, sizeof(titleBuffer))) {
-        button.title = std::string(titleBuffer);
+
+      // Initialize buffer if it doesn't exist
+      if (titleBuffers.find(button.id) == titleBuffers.end()) {
+        strncpy(titleBuffers[button.id].data(), button.title.c_str(), 255);
+        titleBuffers[button.id][255] = '\0';
+      }
+
+      if (ImGui::InputText(("##ButtonTitle" + std::to_string(button.id)).c_str(),
+                           titleBuffers[button.id].data(),
+                           titleBuffers[button.id].size(),
+                           ImGuiInputTextFlags_EnterReturnsTrue)) {
+        // Update on Enter press
+        button.title = std::string(titleBuffers[button.id].data());
+      }
+      // Update when focus is lost
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
+        button.title = std::string(titleBuffers[button.id].data());
       }
 
       ImGui::Separator();
@@ -105,11 +121,23 @@ inline void RenderButtonControls(UIPlotState& uiPlotState, float menuBarHeight) 
       ImGui::Text("Label:");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(-1);
-      char labelBuffer[256];
-      strncpy(labelBuffer, button.buttonLabel.c_str(), sizeof(labelBuffer) - 1);
-      labelBuffer[sizeof(labelBuffer) - 1] = '\0';
-      if (ImGui::InputText(("##ButtonLabel" + std::to_string(button.id)).c_str(), labelBuffer, sizeof(labelBuffer))) {
-        button.buttonLabel = std::string(labelBuffer);
+
+      // Initialize buffer if it doesn't exist
+      if (labelBuffers.find(button.id) == labelBuffers.end()) {
+        strncpy(labelBuffers[button.id].data(), button.buttonLabel.c_str(), 255);
+        labelBuffers[button.id][255] = '\0';
+      }
+
+      if (ImGui::InputText(("##ButtonLabel" + std::to_string(button.id)).c_str(),
+                           labelBuffers[button.id].data(),
+                           labelBuffers[button.id].size(),
+                           ImGuiInputTextFlags_EnterReturnsTrue)) {
+        // Update on Enter press
+        button.buttonLabel = std::string(labelBuffers[button.id].data());
+      }
+      // Update when focus is lost
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
+        button.buttonLabel = std::string(labelBuffers[button.id].data());
       }
 
       ImGui::Spacing();
@@ -143,6 +171,10 @@ inline void RenderButtonControls(UIPlotState& uiPlotState, float menuBarHeight) 
 // TOGGLE CONTROL RENDERING
 // -------------------------------------------------------------------------
 inline void RenderToggleControls(UIPlotState& uiPlotState, float menuBarHeight) {
+  // Static buffers to preserve edit state between frames
+  static std::map<int, std::array<char, 256>> titleBuffers;
+  static std::map<int, std::array<char, 256>> labelBuffers;
+
   // Loop through all active toggle controls
   for (auto &toggle : uiPlotState.activeToggles) {
     if (!toggle.isOpen)
@@ -160,11 +192,23 @@ inline void RenderToggleControls(UIPlotState& uiPlotState, float menuBarHeight) 
       ImGui::Text("Title:");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(-1);
-      char titleBuffer[256];
-      strncpy(titleBuffer, toggle.title.c_str(), sizeof(titleBuffer) - 1);
-      titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-      if (ImGui::InputText(("##ToggleTitle" + std::to_string(toggle.id)).c_str(), titleBuffer, sizeof(titleBuffer))) {
-        toggle.title = std::string(titleBuffer);
+
+      // Initialize buffer if it doesn't exist
+      if (titleBuffers.find(toggle.id) == titleBuffers.end()) {
+        strncpy(titleBuffers[toggle.id].data(), toggle.title.c_str(), 255);
+        titleBuffers[toggle.id][255] = '\0';
+      }
+
+      if (ImGui::InputText(("##ToggleTitle" + std::to_string(toggle.id)).c_str(),
+                           titleBuffers[toggle.id].data(),
+                           titleBuffers[toggle.id].size(),
+                           ImGuiInputTextFlags_EnterReturnsTrue)) {
+        // Update on Enter press
+        toggle.title = std::string(titleBuffers[toggle.id].data());
+      }
+      // Update when focus is lost
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
+        toggle.title = std::string(titleBuffers[toggle.id].data());
       }
 
       ImGui::Separator();
@@ -172,11 +216,23 @@ inline void RenderToggleControls(UIPlotState& uiPlotState, float menuBarHeight) 
       ImGui::Text("Label:");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(-1);
-      char labelBuffer[256];
-      strncpy(labelBuffer, toggle.toggleLabel.c_str(), sizeof(labelBuffer) - 1);
-      labelBuffer[sizeof(labelBuffer) - 1] = '\0';
-      if (ImGui::InputText(("##ToggleLabel" + std::to_string(toggle.id)).c_str(), labelBuffer, sizeof(labelBuffer))) {
-        toggle.toggleLabel = std::string(labelBuffer);
+
+      // Initialize buffer if it doesn't exist
+      if (labelBuffers.find(toggle.id) == labelBuffers.end()) {
+        strncpy(labelBuffers[toggle.id].data(), toggle.toggleLabel.c_str(), 255);
+        labelBuffers[toggle.id][255] = '\0';
+      }
+
+      if (ImGui::InputText(("##ToggleLabel" + std::to_string(toggle.id)).c_str(),
+                           labelBuffers[toggle.id].data(),
+                           labelBuffers[toggle.id].size(),
+                           ImGuiInputTextFlags_EnterReturnsTrue)) {
+        // Update on Enter press
+        toggle.toggleLabel = std::string(labelBuffers[toggle.id].data());
+      }
+      // Update when focus is lost
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
+        toggle.toggleLabel = std::string(labelBuffers[toggle.id].data());
       }
 
       ImGui::Spacing();
@@ -207,6 +263,9 @@ inline void RenderToggleControls(UIPlotState& uiPlotState, float menuBarHeight) 
 // TEXT INPUT CONTROL RENDERING
 // -------------------------------------------------------------------------
 inline void RenderTextInputControls(UIPlotState& uiPlotState, float menuBarHeight) {
+  // Static buffers to preserve edit state between frames
+  static std::map<int, std::array<char, 256>> titleBuffers;
+
   // Loop through all active text input controls
   for (auto &textInput : uiPlotState.activeTextInputs) {
     if (!textInput.isOpen)
@@ -230,11 +289,23 @@ inline void RenderTextInputControls(UIPlotState& uiPlotState, float menuBarHeigh
       ImGui::Text("Title:");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(-1);
-      char titleBuffer[256];
-      strncpy(titleBuffer, textInput.title.c_str(), sizeof(titleBuffer) - 1);
-      titleBuffer[sizeof(titleBuffer) - 1] = '\0';
-      if (ImGui::InputText(("##TextInputTitle" + std::to_string(textInput.id)).c_str(), titleBuffer, sizeof(titleBuffer))) {
-        textInput.title = std::string(titleBuffer);
+
+      // Initialize buffer if it doesn't exist
+      if (titleBuffers.find(textInput.id) == titleBuffers.end()) {
+        strncpy(titleBuffers[textInput.id].data(), textInput.title.c_str(), 255);
+        titleBuffers[textInput.id][255] = '\0';
+      }
+
+      if (ImGui::InputText(("##TextInputTitle" + std::to_string(textInput.id)).c_str(),
+                           titleBuffers[textInput.id].data(),
+                           titleBuffers[textInput.id].size(),
+                           ImGuiInputTextFlags_EnterReturnsTrue)) {
+        // Update on Enter press
+        textInput.title = std::string(titleBuffers[textInput.id].data());
+      }
+      // Update when focus is lost
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
+        textInput.title = std::string(titleBuffers[textInput.id].data());
       }
 
       ImGui::Separator();

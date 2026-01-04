@@ -1,0 +1,98 @@
+editMode: false
+plots:
+  - id: 1
+    title: Plot 1
+    paused: false
+    signals:
+      - IMU.accelX
+      - IMU.accelX_filtered
+    posX: 720
+    posY: 41
+    sizeX: 741
+    sizeY: 560
+readouts:
+  - id: 1
+    title: Battery.current
+    signal: Battery.current
+    posX: 388
+    posY: 384
+    sizeX: 331
+    sizeY: 306
+xyplots:
+  - id: 1
+    title: X/Y Plot 1
+    paused: false
+    xSignal: IMU.accelY
+    ySignal: IMU.accelZ
+    posX: 388
+    posY: 695
+    sizeX: 329
+    sizeY: 420
+histograms:
+  - id: 1
+    title: IMU.accelX_filtered
+    signal: IMU.accelX_filtered
+    numBins: 50
+    posX: 724
+    posY: 598
+    sizeX: 737
+    sizeY: 515
+ffts:
+  - id: 1
+    title: IMU.accelX_filtered FFT
+    signal: IMU.accelX_filtered
+    fftSize: 1024
+    useHanning: true
+    logScale: false
+    posX: 1467
+    posY: 41
+    sizeX: 814
+    sizeY: 558
+spectrograms:
+  - id: 1
+    title: IMU.accelX Spectrogram
+    signal: IMU.accelX
+    fftSize: 128
+    hopSize: 32
+    useHanning: true
+    logScale: false
+    timeWindow: 5
+    maxFrequency: 0
+    posX: 1469
+    posY: 602
+    sizeX: 816
+    sizeY: 515
+buttons:
+  []
+toggles:
+  - id: 1
+    title: UDP Connect
+    toggleLabel: Enable
+    state: true
+    posX: 384
+    posY: 254
+    sizeX: 167
+    sizeY: 123
+  - id: 2
+    title: Online
+    toggleLabel: Enable
+    state: false
+    posX: 553
+    posY: 254
+    sizeX: 164
+    sizeY: 123
+textInputs:
+  - id: 1
+    title: UDP IP
+    textBuffer: localhost
+    posX: 384
+    posY: 150
+    sizeX: 333
+    sizeY: 102
+  - id: 2
+    title: UDP Port
+    textBuffer: 5000
+    posX: 384
+    posY: 40
+    sizeX: 333
+    sizeY: 108
