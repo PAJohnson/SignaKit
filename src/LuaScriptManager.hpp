@@ -16,10 +16,10 @@
 #include "types.hpp"
 #include "ui_state.hpp"
 
-// LuaSocket C API declarations
-extern "C" {
-    int luaopen_socket_core(lua_State* L);
-}
+// Tier 5: sockpp for network I/O
+#include <sockpp/udp_socket.h>
+#include <sockpp/inet_address.h>
+#include <sockpp/exception.h>
 
 namespace fs = std::filesystem;
 
@@ -35,9 +35,94 @@ struct LuaScript {
         : name(n), filepath(fp), enabled(true), hasError(false) {}
 };
 
+// Tier 5: Lua-accessible UDP socket wrapper using sockpp
+class LuaUDPSocket {
+private:
+    sockpp::udp_socket socket;
+    bool is_bound = false;
+
+public:
+    LuaUDPSocket() = default;
+
+    // Bind socket to local address and port
+    bool bind(const std::string& host, int port) {
+        try {
+            sockpp::inet_address addr(host, static_cast<in_port_t>(port));
+            if (!socket.bind(addr)) {
+                printf("[LuaUDPSocket] Failed to bind to %s:%d - %s\n",
+                       host.c_str(), port, socket.last_error_str().c_str());
+                return false;
+            }
+            is_bound = true;
+            printf("[LuaUDPSocket] Bound to %s:%d\n", host.c_str(), port);
+            return true;
+        } catch (const std::exception& e) {
+            printf("[LuaUDPSocket] Exception binding: %s\n", e.what());
+            return false;
+        }
+    }
+
+    // Receive data (non-blocking if set_non_blocking was called)
+    // Returns: tuple(data_string, error_string)
+    std::tuple<std::string, std::string> receive(int max_size) {
+        if (!is_bound) {
+            return std::make_tuple("", "not bound");
+        }
+
+        std::vector<char> buffer(max_size);
+        ssize_t n = socket.recv(buffer.data(), buffer.size());
+
+        if (n > 0) {
+            return std::make_tuple(std::string(buffer.data(), n), "");
+        } else if (n == 0) {
+            return std::make_tuple("", "closed");
+        } else {
+            // n < 0: error occurred
+            // For non-blocking sockets, WSAEWOULDBLOCK/EAGAIN means "no data available"
+            int err = socket.last_error();
+            #ifdef _WIN32
+                if (err == WSAEWOULDBLOCK) {
+                    return std::make_tuple("", "timeout");
+                }
+            #else
+                if (err == EAGAIN || err == EWOULDBLOCK) {
+                    return std::make_tuple("", "timeout");
+                }
+            #endif
+            return std::make_tuple("", socket.last_error_str());
+        }
+    }
+
+    // Set non-blocking mode
+    bool set_non_blocking(bool enable) {
+        if (!socket.set_non_blocking(enable)) {
+            printf("[LuaUDPSocket] Failed to set non-blocking mode: %s\n",
+                   socket.last_error_str().c_str());
+            return false;
+        }
+        return true;
+    }
+
+    // Close socket
+    void close() {
+        socket.close();
+        is_bound = false;
+    }
+
+    // Check if socket is open
+    bool is_open() const {
+        return socket.is_open();
+    }
+};
+
 class LuaScriptManager {
+private:
+    // Tier 5: Socket library initializer (must be created before any sockets)
+    // static inline sockpp::socket_initializer sockInit;
+
 public:
     LuaScriptManager() {
+        sockpp::initialize();
         initializeLuaState();
     }
 
@@ -175,28 +260,33 @@ public:
             printf("[LuaScriptManager] Registered cleanup callback\n");
         });
 
-        // Tier 5: LuaSocket Integration
-        // Register LuaSocket core module
-        lua.require("socket.core", luaopen_socket_core);
+        // Tier 5: sockpp Integration - UDP Socket API
+        // Register LuaUDPSocket as a usertype
+        lua.new_usertype<LuaUDPSocket>("UDPSocket",
+            sol::constructors<LuaUDPSocket()>(),
+            "bind", &LuaUDPSocket::bind,
+            "receive", &LuaUDPSocket::receive,
+            "set_non_blocking", &LuaUDPSocket::set_non_blocking,
+            "close", &LuaUDPSocket::close,
+            "is_open", &LuaUDPSocket::is_open
+        );
 
-        // Load socket.lua wrapper (provides socket.udp(), socket.tcp(), etc.)
-        // This is a simple Lua wrapper that we'll define inline
-        lua.script(R"(
-            socket = require("socket.core")
+        // Factory function for creating UDP sockets
+        lua.set_function("create_udp_socket", []() {
+            return std::make_shared<LuaUDPSocket>();
+        });
 
-            -- Simplified socket.udp() wrapper
-            function socket.udp()
-                return socket.core.udp()
-            end
-
-            -- Simplified socket.tcp() wrapper
-            function socket.tcp()
-                return socket.core.tcp()
-            end
-
-            -- Version info
-            socket._VERSION = "LuaSocket 3.1.0"
-        )");
+        // Tier 5: Expose packet parsing to Lua (for I/O scripts to call)
+        lua.set_function("parse_packet", [this](const std::string& buffer, size_t length) -> bool {
+            if (currentSignalRegistry == nullptr) {
+                printf("[Lua] Warning: Cannot parse packet - no active signal registry\n");
+                return false;
+            }
+            else {
+                printf("[Lua] currentSignalRegistry not null!\n");
+            }
+            return parsePacket(buffer.c_str(), length, *currentSignalRegistry);
+        });
 
         lua.set_function("sleep_ms", [this](int milliseconds) {
             sleepMs(milliseconds);
@@ -351,7 +441,7 @@ public:
         }
 
         // Clear the registry pointer
-        currentSignalRegistry = nullptr;
+        // currentSignalRegistry = nullptr;
     }
 
     // Tier 3: Execute frame callbacks every GUI render frame
@@ -472,7 +562,7 @@ public:
         }
 
         // Clear the registry pointer
-        currentSignalRegistry = nullptr;
+        // currentSignalRegistry = nullptr;
 
         return handled;
     }

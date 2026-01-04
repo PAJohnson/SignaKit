@@ -3,7 +3,8 @@
     "allow": [
       "Bash(powershell -Command \"\\(Get-Content ''c:\\\\Users\\\\pajoh\\\\repos\\\\Telemetry_GUI\\\\src\\\\main.cpp''\\).Count\")",
       "Bash(powershell -Command \"Test-Path ''c:\\\\Users\\\\pajoh\\\\repos\\\\Telemetry_GUI\\\\src\\\\layout_persistence.hpp''\")",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(ls:*)"
     ]
   }
 }

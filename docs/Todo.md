@@ -227,76 +227,73 @@ The user should be able to right click on "Button 1" and be able to type in the 
 │ • SDL/ImGui rendering loop (60 FPS)                            │
 │ • Signal registry management (stateMutex)                      │
 │ • Plot/Control rendering (plot_rendering.hpp)                 │
-│ • LuaScriptManager (execute frame callbacks)                  │
-│ • Thread management API (create_lua_thread, stop_lua_thread)  │
+│ • LuaScriptManager (execute frame callbacks @ 60 FPS)         │
+│   ├─ UDPDataSink.lua (I/O frame callback)                     │
+│   │   • LuaSocket: socket.udp() → sock:receive()              │
+│   │   • Non-blocking I/O (timeout=0)                          │
+│   │   • Process up to 100 packets/frame                       │
+│   │   • update_signal() calls                                 │
+│   └─ Other frame callbacks                                    │
 │ • Simplified menu bar (no network fields)                      │
-└─────────────────────────────────────────────────────────────────┘
-        ↕ (Signal Registry + Mutex)
-┌─────────────────────────────────────────────────────────────────┐
-│ Lua I/O Thread (scripts/io/UDPDataSink.lua)                    │
-├─────────────────────────────────────────────────────────────────┤
-│ • LuaSocket: socket.udp() → sock:receivefrom()                │
-│ • Buffer → parse in Lua → update_signal()                     │
-│ • Logging to file (optional)                                   │
-│ • Reconnection logic, error handling                           │
-│ • Configurable via GUI text inputs/buttons                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-#### Phase 1: Lua Threading API ⭐ **CRITICAL**
+#### Phase 1: Frame Callback Architecture ⭐ **REVISED**
 
-**Objective**: Expose C++ threading primitives to Lua so scripts can create I/O worker threads.
+**Objective**: Use existing Tier 3 frame callback system for I/O instead of threading.
+
+**Rationale:**
+- ✅ **Simpler**: No threading complexity, state serialization, or mutex management
+- ✅ **Sufficient performance**: 60 FPS × 100 packets/frame = 6000+ packets/sec
+- ✅ **Clean state access**: `stateMutex` already held during frame callbacks
+- ✅ **Proven architecture**: Reuses existing Tier 3 frame callback system
+- ✅ **Better debugging**: Single-threaded execution, no race conditions
 
 **Implementation:**
 
-**1.1 Add Threading Functions to LuaScriptManager**
+I/O scripts register via `on_frame(callback)` (already exists from Tier 3):
 
-File: `src/LuaScriptManager.hpp`
-
-```cpp
-class LuaScriptManager {
-private:
-    std::vector<std::thread> luaThreads;
-    std::atomic<bool> threadsRunning{true};
-    std::mutex threadVectorMutex;
-
-public:
-    // Thread management API
-    int createLuaThread(sol::function luaFunc);
-    void stopLuaThread(int threadId);
-    void stopAllLuaThreads();
-
-    // Thread-safe utilities
-    void sleepMs(int milliseconds);
-    bool isAppRunning();  // Expose appRunning atomic
-};
-```
-
-**Lua API exposed:**
+**Lua API (already available):**
 ```lua
--- Create a background thread that runs Lua function
-threadId = create_thread(function()
-    while is_app_running() do
-        -- I/O operations here
-        sleep_ms(10)
-    end
-end)
+-- State variables persist across frames
+local udpSocket = nil
+local connected = false
 
--- Stop a specific thread
-stop_thread(threadId)
+-- Frame callback function
+local function io_callback()
+    -- Check toggle state
+    if get_toggle_state("Connect") then
+        if not connected then
+            udpSocket = socket.udp()
+            udpSocket:settimeout(0)  -- Non-blocking
+            connected = true
+        end
+
+        -- Process up to 100 packets per frame
+        for i = 1, 100 do
+            local data, err = udpSocket:receive()
+            if data then
+                -- Process packet
+            elseif err == "timeout" then
+                break  -- No more data this frame
+            end
+        end
+    end
+end
+
+-- Register callback
+on_frame(io_callback)
 ```
 
 **Key considerations:**
-- Each Lua thread gets its own `sol::state` (Lua states are NOT thread-safe)
-- Threads share `signalRegistry` via existing `stateMutex`
-- Thread lifecycle: C++ `std::thread` wrapping Lua function
-- Cleanup: `stopAllLuaThreads()` called on app shutdown
+- Callbacks run in GUI thread with `stateMutex` held
+- Non-blocking I/O essential (`socket:settimeout(0)`)
+- Limit packets per frame to avoid blocking rendering
+- State variables persist across frames (local variables at script scope)
 
-**Files to modify:**
-- `src/LuaScriptManager.hpp` - Add thread management methods
-- `src/main.cpp` - Call `stopAllLuaThreads()` before exit
+**Files modified:** ✅ None required (uses existing Tier 3 infrastructure)
 
 ---
 

@@ -4,7 +4,7 @@
 -- This script runs as a frame callback at 60 FPS (non-blocking I/O)
 
 print("========================================")
-print("UDPDataSink.lua - Lua-based UDP I/O")
+print("UDPDataSink.lua - Lua-based UDP I/O (sockpp)")
 print("========================================")
 
 -- State variables (persist across frame callbacks)
@@ -32,29 +32,32 @@ local function connect()
     local ip, port = getConfig()
     print(string.format("[UDPDataSink] Attempting to bind to %s:%d", ip, port))
 
-    -- Create UDP socket
-    local udp, err = socket.udp()
-    if not udp then
-        print("[UDPDataSink] Failed to create UDP socket: " .. tostring(err))
+    -- Create UDP socket using sockpp wrapper
+    udpSocket = create_udp_socket()
+    if not udpSocket then
+        print("[UDPDataSink] Failed to create UDP socket")
         return false
     end
 
     -- Bind to IP:PORT
-    local success, bindErr = udp:setsockname(ip, port)
-    if not success then
-        print("[UDPDataSink] Failed to bind socket: " .. tostring(bindErr))
-        udp:close()
+    if not udpSocket:bind(ip, port) then
+        print("[UDPDataSink] Failed to bind socket")
+        udpSocket = nil
         return false
     end
 
-    -- Set non-blocking mode (timeout = 0)
-    udp:settimeout(0)
+    -- Set non-blocking mode
+    if not udpSocket:set_non_blocking(true) then
+        print("[UDPDataSink] Failed to set non-blocking mode")
+        udpSocket:close()
+        udpSocket = nil
+        return false
+    end
 
-    udpSocket = udp
     connected = true
 
     -- Optional: Open binary log file
-    -- logFile = io.open("packet_log.bin", "wb")
+    logFile = io.open("packet_log.bin", "wb")
 
     print(string.format("[UDPDataSink] Connected to UDP %s:%d", ip, port))
     return true
@@ -96,9 +99,10 @@ local function udp_frame_callback()
         local packetsThisFrame = 0
 
         while packetsThisFrame < maxPacketsPerFrame do
-            local data, err = udpSocket:receive()
+            -- Receive returns tuple: (data, error_string)
+            local data, err = udpSocket:receive(65536)
 
-            if data then
+            if data and #data > 0 then
                 packetsReceived = packetsReceived + 1
                 packetsThisFrame = packetsThisFrame + 1
 
@@ -108,21 +112,22 @@ local function udp_frame_callback()
                     logFile:flush()
                 end
 
-                -- Parse packet using Lua parser
-                local parserLoaded, parser = pcall(require, "parsers.legacy_binary")
-                if parserLoaded and parser and parser.parse then
-                    local parseSuccess, parseErr = pcall(parser.parse, data, #data)
-                    if not parseSuccess then
-                        print("[UDPDataSink] Parser error: " .. tostring(parseErr))
-                    end
+                -- Parse packet using registered parser
+                -- The legacy_binary parser is already registered by Tier 2
+                local parseSuccess = parse_packet(data, #data)
+                if not parseSuccess then
+                    -- Silently ignore unparseable packets (this is normal)
                 end
             elseif err == "timeout" then
                 -- No more data available this frame
                 break
-            else
+            elseif err and #err > 0 then
                 -- Socket error
                 print("[UDPDataSink] Socket error: " .. tostring(err))
                 disconnect()
+                break
+            else
+                -- Empty data, no error - just break
                 break
             end
         end
