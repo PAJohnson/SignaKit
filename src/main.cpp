@@ -93,6 +93,10 @@ LuaScriptManager luaScriptManager;
 // UI plot state (consolidates all plot window vectors and ID counters)
 UIPlotState uiPlotState;
 
+// Tier 3: Frame tracking for Lua callbacks
+static uint64_t frameNumber = 0;
+static auto lastFrameTime = std::chrono::high_resolution_clock::now();
+
 // Include layout persistence functions (must come after OfflinePlaybackState definition)
 #include "layout_persistence.hpp"
 
@@ -274,6 +278,23 @@ void MainLoopStep(void *arg) {
   // Lock data while we render to prevent iterator invalidation
   std::lock_guard<std::mutex> lock(stateMutex);
 
+  // Tier 3: Execute frame callbacks
+  frameNumber++;
+  auto currentFrameTime = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> elapsed = currentFrameTime - lastFrameTime;
+  double deltaTime = elapsed.count();
+  lastFrameTime = currentFrameTime;
+
+  // Count total active plots
+  int totalPlots = (int)(uiPlotState.activePlots.size() +
+                        uiPlotState.activeReadoutBoxes.size() +
+                        uiPlotState.activeXYPlots.size() +
+                        uiPlotState.activeHistograms.size() +
+                        uiPlotState.activeFFTs.size() +
+                        uiPlotState.activeSpectrograms.size());
+
+  luaScriptManager.executeFrameCallbacks(signalRegistry, frameNumber, deltaTime, totalPlots);
+
   // Get menu bar height
   float menuBarHeight = ImGui::GetFrameHeight();
 
@@ -382,7 +403,7 @@ int main(int, char **) {
 
   SDL_WindowFlags window_flags =
       (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
-                        SDL_WINDOW_ALLOW_HIGHDPI);
+                        SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_MAXIMIZED);
   SDL_Window *window =
       SDL_CreateWindow("Telemetry Analyzer", SDL_WINDOWPOS_CENTERED,
                        SDL_WINDOWPOS_CENTERED, 1600, 900, window_flags);

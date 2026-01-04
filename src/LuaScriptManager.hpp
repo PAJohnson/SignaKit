@@ -65,6 +65,35 @@ public:
         lua.set_function("log", [](const std::string& message) {
             printf("[Lua] %s\n", message.c_str());
         });
+
+        // Tier 3: Frame callback registration API
+        // on_frame(function) - registers a callback to run every GUI frame
+        lua.set_function("on_frame", [this](sol::protected_function func) {
+            registerFrameCallback(func);
+        });
+
+        // Tier 3: Alert/condition monitoring API
+        // on_alert(name, conditionFunction, actionFunction, [cooldownSeconds]) - monitors a condition
+        lua.set_function("on_alert", [this](const std::string& alertName,
+                                            sol::protected_function conditionFunc,
+                                            sol::protected_function actionFunc,
+                                            sol::optional<double> cooldownSeconds) {
+            registerAlert(alertName, conditionFunc, actionFunc, cooldownSeconds.value_or(0.0));
+        });
+
+        // Tier 3: Get frame number and delta time
+        lua.set_function("get_frame_number", [this]() -> uint64_t {
+            return currentFrameNumber;
+        });
+
+        lua.set_function("get_delta_time", [this]() -> double {
+            return currentDeltaTime;
+        });
+
+        // Tier 3: Get plot count (for monitoring GUI state)
+        lua.set_function("get_plot_count", [this]() -> int {
+            return currentPlotCount;
+        });
     }
 
     // Load a single script from file
@@ -133,9 +162,11 @@ public:
     void reloadAllScripts() {
         printf("[LuaScriptManager] Reloading all scripts...\n");
 
-        // Clear packet callbacks and parsers (they'll be re-registered by scripts)
+        // Clear all callbacks and parsers (they'll be re-registered by scripts)
         packetCallbacks.clear();
         packetParsers.clear();
+        frameCallbacks.clear();
+        alerts.clear();
 
         // Reinitialize Lua state
         initializeLuaState();
@@ -198,6 +229,41 @@ public:
         }
 
         // Clear the registry pointer
+        currentSignalRegistry = nullptr;
+    }
+
+    // Tier 3: Execute frame callbacks every GUI render frame
+    // NOTE: Caller must hold stateMutex lock before calling this function
+    // frameNumber: current frame number
+    // deltaTime: time since last frame in seconds
+    // plotCount: number of active plots
+    void executeFrameCallbacks(std::map<std::string, Signal>& signalRegistry,
+                              uint64_t frameNumber,
+                              double deltaTime,
+                              int plotCount) {
+        // Set frame context
+        currentSignalRegistry = &signalRegistry;
+        currentFrameNumber = frameNumber;
+        currentDeltaTime = deltaTime;
+        currentPlotCount = plotCount;
+
+        // Execute all frame callbacks
+        for (auto& func : frameCallbacks) {
+            try {
+                auto result = func();
+                if (!result.valid()) {
+                    sol::error err = result;
+                    printf("[LuaScriptManager] Frame callback error: %s\n", err.what());
+                }
+            } catch (const std::exception& e) {
+                printf("[LuaScriptManager] Exception in frame callback: %s\n", e.what());
+            }
+        }
+
+        // Execute alert monitoring
+        executeAlerts();
+
+        // Clear context
         currentSignalRegistry = nullptr;
     }
 
@@ -279,8 +345,29 @@ private:
     // Vector of registered packet parsers: (parserName, parserFunction)
     std::vector<std::pair<std::string, sol::protected_function>> packetParsers;
 
-    // Pointer to signal registry (set during executePacketCallbacks)
+    // Tier 3: Frame callbacks
+    std::vector<sol::protected_function> frameCallbacks;
+
+    // Tier 3: Alert monitoring
+    struct Alert {
+        std::string name;
+        sol::protected_function conditionFunc;
+        sol::protected_function actionFunc;
+        double cooldownSeconds;
+        double lastTriggerTime;
+
+        Alert(const std::string& n, sol::protected_function cond, sol::protected_function act, double cooldown)
+            : name(n), conditionFunc(cond), actionFunc(act), cooldownSeconds(cooldown), lastTriggerTime(-1e9) {}
+    };
+    std::vector<Alert> alerts;
+
+    // Pointer to signal registry (set during executePacketCallbacks and executeFrameCallbacks)
     std::map<std::string, Signal>* currentSignalRegistry = nullptr;
+
+    // Frame context (set during executeFrameCallbacks)
+    uint64_t currentFrameNumber = 0;
+    double currentDeltaTime = 0.0;
+    int currentPlotCount = 0;
 
     // Helper functions for endianness conversion
     template<typename T>
@@ -549,6 +636,79 @@ private:
             }
             return currentSignalRegistry->find(name) != currentSignalRegistry->end();
         });
+    }
+
+    // Tier 3: Register a frame callback function
+    void registerFrameCallback(sol::protected_function func) {
+        frameCallbacks.push_back(func);
+        printf("[LuaScriptManager] Registered frame callback (total: %zu)\n", frameCallbacks.size());
+    }
+
+    // Tier 3: Register an alert with condition monitoring
+    void registerAlert(const std::string& alertName,
+                      sol::protected_function conditionFunc,
+                      sol::protected_function actionFunc,
+                      double cooldownSeconds) {
+        alerts.emplace_back(alertName, conditionFunc, actionFunc, cooldownSeconds);
+        printf("[LuaScriptManager] Registered alert: %s (cooldown: %.1fs)\n", alertName.c_str(), cooldownSeconds);
+    }
+
+    // Tier 3: Execute all alerts and check conditions
+    void executeAlerts() {
+        if (currentSignalRegistry == nullptr) {
+            return;
+        }
+
+        // Get current time from any signal (use the latest timestamp available)
+        double currentTime = 0.0;
+        for (const auto& [name, sig] : *currentSignalRegistry) {
+            if (!sig.dataX.empty()) {
+                double lastTime;
+                if (sig.mode == PlaybackMode::ONLINE && sig.dataX.size() >= sig.maxSize) {
+                    int latestIndex = (sig.offset - 1 + sig.maxSize) % sig.maxSize;
+                    lastTime = sig.dataX[latestIndex];
+                } else {
+                    lastTime = sig.dataX.back();
+                }
+                if (lastTime > currentTime) {
+                    currentTime = lastTime;
+                }
+            }
+        }
+
+        // Check each alert
+        for (auto& alert : alerts) {
+            try {
+                // Check if enough time has passed since last trigger
+                if (currentTime - alert.lastTriggerTime < alert.cooldownSeconds) {
+                    continue;
+                }
+
+                // Evaluate condition
+                auto condResult = alert.conditionFunc();
+                if (!condResult.valid()) {
+                    sol::error err = condResult;
+                    printf("[LuaScriptManager] Alert '%s' condition error: %s\n", alert.name.c_str(), err.what());
+                    continue;
+                }
+
+                // If condition is true, execute action
+                if (condResult.return_count() > 0) {
+                    sol::object retVal = condResult;
+                    if (retVal.is<bool>() && retVal.as<bool>()) {
+                        // Trigger the action
+                        auto actionResult = alert.actionFunc();
+                        if (!actionResult.valid()) {
+                            sol::error err = actionResult;
+                            printf("[LuaScriptManager] Alert '%s' action error: %s\n", alert.name.c_str(), err.what());
+                        }
+                        alert.lastTriggerTime = currentTime;
+                    }
+                }
+            } catch (const std::exception& e) {
+                printf("[LuaScriptManager] Exception in alert '%s': %s\n", alert.name.c_str(), e.what());
+            }
+        }
     }
 
     // Register a packet callback function

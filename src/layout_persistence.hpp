@@ -188,6 +188,15 @@ inline bool SaveLayout(const std::string &filename,
         out << signal;
       }
       out << YAML::EndSeq;
+      // Save window position and size if set
+      if (plot.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << plot.posX;
+        out << YAML::Key << "posY" << YAML::Value << plot.posY;
+      }
+      if (plot.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << plot.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << plot.sizeY;
+      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -199,6 +208,14 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "id" << YAML::Value << readout.id;
       out << YAML::Key << "title" << YAML::Value << readout.title;
       out << YAML::Key << "signal" << YAML::Value << readout.signalName;
+      if (readout.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << readout.posX;
+        out << YAML::Key << "posY" << YAML::Value << readout.posY;
+      }
+      if (readout.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << readout.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << readout.sizeY;
+      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -212,6 +229,14 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "paused" << YAML::Value << xyPlot.paused;
       out << YAML::Key << "xSignal" << YAML::Value << xyPlot.xSignalName;
       out << YAML::Key << "ySignal" << YAML::Value << xyPlot.ySignalName;
+      if (xyPlot.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << xyPlot.posX;
+        out << YAML::Key << "posY" << YAML::Value << xyPlot.posY;
+      }
+      if (xyPlot.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << xyPlot.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << xyPlot.sizeY;
+      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -224,6 +249,14 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "title" << YAML::Value << histogram.title;
       out << YAML::Key << "signal" << YAML::Value << histogram.signalName;
       out << YAML::Key << "numBins" << YAML::Value << histogram.numBins;
+      if (histogram.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << histogram.posX;
+        out << YAML::Key << "posY" << YAML::Value << histogram.posY;
+      }
+      if (histogram.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << histogram.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << histogram.sizeY;
+      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -238,6 +271,14 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "fftSize" << YAML::Value << fft.fftSize;
       out << YAML::Key << "useHanning" << YAML::Value << fft.useHanning;
       out << YAML::Key << "logScale" << YAML::Value << fft.logScale;
+      if (fft.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << fft.posX;
+        out << YAML::Key << "posY" << YAML::Value << fft.posY;
+      }
+      if (fft.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << fft.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << fft.sizeY;
+      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -255,6 +296,14 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "logScale" << YAML::Value << spectrogram.logScale;
       out << YAML::Key << "timeWindow" << YAML::Value << spectrogram.timeWindow;
       out << YAML::Key << "maxFrequency" << YAML::Value << spectrogram.maxFrequency;
+      if (spectrogram.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << spectrogram.posX;
+        out << YAML::Key << "posY" << YAML::Value << spectrogram.posY;
+      }
+      if (spectrogram.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << spectrogram.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << spectrogram.sizeY;
+      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -318,6 +367,16 @@ inline bool LoadLayout(const std::string &filename,
         }
       }
 
+      // Load window position and size if present
+      if (plotNode["posX"]) {
+        plot.posX = plotNode["posX"].as<float>();
+        plot.posY = plotNode["posY"].as<float>();
+      }
+      if (plotNode["sizeX"]) {
+        plot.sizeX = plotNode["sizeX"].as<float>();
+        plot.sizeY = plotNode["sizeY"].as<float>();
+      }
+
       loadedPlots.push_back(plot);
       if (plot.id > maxPlotId) {
         maxPlotId = plot.id;
@@ -332,6 +391,15 @@ inline bool LoadLayout(const std::string &filename,
         readout.title = readoutNode["title"].as<std::string>();
         readout.signalName = readoutNode["signal"] ? readoutNode["signal"].as<std::string>() : "";
         readout.isOpen = true;
+
+        if (readoutNode["posX"]) {
+          readout.posX = readoutNode["posX"].as<float>();
+          readout.posY = readoutNode["posY"].as<float>();
+        }
+        if (readoutNode["sizeX"]) {
+          readout.sizeX = readoutNode["sizeX"].as<float>();
+          readout.sizeY = readoutNode["sizeY"].as<float>();
+        }
 
         loadedReadouts.push_back(readout);
         if (readout.id > maxReadoutId) {
@@ -351,6 +419,15 @@ inline bool LoadLayout(const std::string &filename,
         xyPlot.ySignalName = xyPlotNode["ySignal"] ? xyPlotNode["ySignal"].as<std::string>() : "";
         xyPlot.isOpen = true;
 
+        if (xyPlotNode["posX"]) {
+          xyPlot.posX = xyPlotNode["posX"].as<float>();
+          xyPlot.posY = xyPlotNode["posY"].as<float>();
+        }
+        if (xyPlotNode["sizeX"]) {
+          xyPlot.sizeX = xyPlotNode["sizeX"].as<float>();
+          xyPlot.sizeY = xyPlotNode["sizeY"].as<float>();
+        }
+
         loadedXYPlots.push_back(xyPlot);
         if (xyPlot.id > maxXYPlotId) {
           maxXYPlotId = xyPlot.id;
@@ -367,6 +444,15 @@ inline bool LoadLayout(const std::string &filename,
         histogram.signalName = histogramNode["signal"] ? histogramNode["signal"].as<std::string>() : "";
         histogram.numBins = histogramNode["numBins"] ? histogramNode["numBins"].as<int>() : 50;
         histogram.isOpen = true;
+
+        if (histogramNode["posX"]) {
+          histogram.posX = histogramNode["posX"].as<float>();
+          histogram.posY = histogramNode["posY"].as<float>();
+        }
+        if (histogramNode["sizeX"]) {
+          histogram.sizeX = histogramNode["sizeX"].as<float>();
+          histogram.sizeY = histogramNode["sizeY"].as<float>();
+        }
 
         loadedHistograms.push_back(histogram);
         if (histogram.id > maxHistogramId) {
@@ -386,6 +472,15 @@ inline bool LoadLayout(const std::string &filename,
         fft.useHanning = fftNode["useHanning"] ? fftNode["useHanning"].as<bool>() : true;
         fft.logScale = fftNode["logScale"] ? fftNode["logScale"].as<bool>() : true;
         fft.isOpen = true;
+
+        if (fftNode["posX"]) {
+          fft.posX = fftNode["posX"].as<float>();
+          fft.posY = fftNode["posY"].as<float>();
+        }
+        if (fftNode["sizeX"]) {
+          fft.sizeX = fftNode["sizeX"].as<float>();
+          fft.sizeY = fftNode["sizeY"].as<float>();
+        }
 
         loadedFFTs.push_back(fft);
         if (fft.id > maxFFTId) {
@@ -408,6 +503,15 @@ inline bool LoadLayout(const std::string &filename,
         spectrogram.timeWindow = spectrogramNode["timeWindow"] ? spectrogramNode["timeWindow"].as<double>() : 5.0;
         spectrogram.maxFrequency = spectrogramNode["maxFrequency"] ? spectrogramNode["maxFrequency"].as<int>() : 0;
         spectrogram.isOpen = true;
+
+        if (spectrogramNode["posX"]) {
+          spectrogram.posX = spectrogramNode["posX"].as<float>();
+          spectrogram.posY = spectrogramNode["posY"].as<float>();
+        }
+        if (spectrogramNode["sizeX"]) {
+          spectrogram.sizeX = spectrogramNode["sizeX"].as<float>();
+          spectrogram.sizeY = spectrogramNode["sizeY"].as<float>();
+        }
 
         loadedSpectrograms.push_back(spectrogram);
         if (spectrogram.id > maxSpectrogramId) {
