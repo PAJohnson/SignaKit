@@ -17,7 +17,7 @@ struct Signal {
   int maxSize;
   PlaybackMode mode;
 
-  Signal(std::string n = "", int size = 2000, PlaybackMode m = PlaybackMode::ONLINE)
+  Signal(std::string n = "", int size = 10000, PlaybackMode m = PlaybackMode::ONLINE)
       : name(n), maxSize(size), offset(0), mode(m) {
     if (mode == PlaybackMode::ONLINE) {
       dataX.reserve(maxSize);

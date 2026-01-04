@@ -71,7 +71,7 @@ inline bool LoadLogFile(const std::string &filename,
   signalRegistry.clear();
   for (const auto &pkt : packets) {
     for (const auto &sig : pkt.signals) {
-      signalRegistry[sig.key] = Signal(sig.key, 2000, PlaybackMode::OFFLINE);
+      signalRegistry[sig.key] = Signal(sig.key, 100000, PlaybackMode::OFFLINE);
     }
   }
 

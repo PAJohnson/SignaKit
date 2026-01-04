@@ -179,55 +179,8 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
       }
     }
 
-    ImGui::SameLine();
-    ImGui::Separator();
-    ImGui::SameLine();
-
-    // Online/Offline Mode Toggle
-    ImGui::Text("Mode:");
-    ImGui::SameLine();
-    bool isOnline = (currentPlaybackMode == PlaybackMode::ONLINE);
-    if (ImGui::RadioButton("Online", isOnline)) {
-      if (!isOnline) {
-        // Switching to online mode
-        currentPlaybackMode = PlaybackMode::ONLINE;
-        offlineState.fileLoaded = false;
-
-        // Clear and reinitialize signal registry for online mode
-        signalRegistry.clear();
-        // Note: Network connection is now managed in Lua via UDPDataSink.lua
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("Offline", !isOnline)) {
-      if (isOnline) {
-        // Switching to offline mode
-        currentPlaybackMode = PlaybackMode::OFFLINE;
-        // Note: Network disconnection is now managed in Lua via UDPDataSink.lua
-      }
-    }
-
-    ImGui::Separator();
-
-    // Conditional UI based on mode
-    if (currentPlaybackMode == PlaybackMode::ONLINE) {
-      // Online mode: Network controls are now in Lua scripts
-    } else {
-      // Offline mode: Open File button
-      if (ImGui::Button("Open Log File")) {
-        IGFD::FileDialogConfig config;
-        config.path = ".";
-        ImGuiFileDialog::Instance()->OpenDialog("OpenLogFileDlg", "Open Log File", ".bin", config);
-      }
-
-      // Display loaded file info
-      if (offlineState.fileLoaded) {
-        ImGui::SameLine();
-        ImGui::Text("Loaded: %s (%.2fs)",
-                    offlineState.loadedFilePath.c_str(),
-                    offlineState.maxTime - offlineState.minTime);
-      }
-    }
+    // Note: Online/Offline mode and all data source controls are now managed in Lua
+    // via DataSource.lua - Users create a Toggle control titled "Online" to switch between modes
 
     ImGui::EndMainMenuBar();
   }

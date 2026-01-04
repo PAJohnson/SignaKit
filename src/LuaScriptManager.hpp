@@ -15,6 +15,7 @@
 #include <chrono>
 #include "types.hpp"
 #include "ui_state.hpp"
+#include "ImGuiFileDialog.h"
 
 // Tier 5: sockpp for network I/O
 #include <sockpp/udp_socket.h>
@@ -326,6 +327,66 @@ public:
                 std::chrono::steady_clock::now().time_since_epoch()
             ).count();
         });
+
+        // Offline playback API
+        // Set a signal's playback mode (online = circular buffer, offline = unlimited growth)
+        lua.set_function("set_signal_mode", [this](const std::string& name, const std::string& mode) {
+            if (currentSignalRegistry == nullptr) {
+                printf("[Lua] Warning: Cannot set signal mode - no active signal registry\n");
+                return;
+            }
+
+            PlaybackMode playbackMode = (mode == "offline") ? PlaybackMode::OFFLINE : PlaybackMode::ONLINE;
+
+            auto it = currentSignalRegistry->find(name);
+            if (it != currentSignalRegistry->end()) {
+                it->second.SetMode(playbackMode);
+            } else {
+                // Create new signal in the specified mode
+                (*currentSignalRegistry)[name] = Signal(name, 10000, playbackMode);
+            }
+        });
+
+        // Clear all signals (useful when loading a new offline file)
+        lua.set_function("clear_all_signals", [this]() {
+            if (currentSignalRegistry == nullptr) {
+                printf("[Lua] Warning: Cannot clear signals - no active signal registry\n");
+                return;
+            }
+            currentSignalRegistry->clear();
+        });
+
+        // Set the default playback mode for newly created signals
+        lua.set_function("set_default_signal_mode", [this](const std::string& mode) {
+            if (mode == "offline") {
+                defaultSignalMode = PlaybackMode::OFFLINE;
+                printf("[Lua] Default signal mode set to OFFLINE\n");
+            } else {
+                defaultSignalMode = PlaybackMode::ONLINE;
+                printf("[Lua] Default signal mode set to ONLINE\n");
+            }
+        });
+
+        // File dialog support for offline playback
+        lua.set_function("open_file_dialog", [](const std::string& dialogKey, const std::string& title, const std::string& filters) {
+            IGFD::FileDialogConfig config;
+            config.path = ".";
+            ImGuiFileDialog::Instance()->OpenDialog(dialogKey.c_str(), title.c_str(), filters.c_str(), config);
+        });
+
+        lua.set_function("is_file_dialog_open", [](const std::string& dialogKey) -> bool {
+            return ImGuiFileDialog::Instance()->Display(dialogKey.c_str(), ImGuiWindowFlags_None, ImVec2(800, 600));
+        });
+
+        lua.set_function("get_file_dialog_result", [this](const std::string& dialogKey) -> sol::object {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
+                ImGuiFileDialog::Instance()->Close();
+                return sol::make_object(lua, filePathName);
+            }
+            ImGuiFileDialog::Instance()->Close();
+            return sol::lua_nil;
+        });
     }
 
     // Load a single script from file
@@ -590,6 +651,9 @@ private:
     // Pointer to signal registry (set during executeFrameCallbacks)
     std::map<std::string, Signal>* currentSignalRegistry = nullptr;
 
+    // Default playback mode for new signals (changed by set_default_signal_mode)
+    PlaybackMode defaultSignalMode = PlaybackMode::ONLINE;
+
     // Frame context (set during executeFrameCallbacks)
     uint64_t currentFrameNumber = 0;
     double currentDeltaTime = 0.0;
@@ -766,9 +830,9 @@ private:
                 return;
             }
 
-            // Get or create the signal
+            // Get or create the signal (using default mode)
             if (currentSignalRegistry->find(name) == currentSignalRegistry->end()) {
-                (*currentSignalRegistry)[name] = Signal(name, 2000, PlaybackMode::ONLINE);
+                (*currentSignalRegistry)[name] = Signal(name, 10000, defaultSignalMode);
             }
 
             Signal& sig = (*currentSignalRegistry)[name];
@@ -782,7 +846,7 @@ private:
             }
 
             if (currentSignalRegistry->find(name) == currentSignalRegistry->end()) {
-                (*currentSignalRegistry)[name] = Signal(name, 2000, PlaybackMode::ONLINE);
+                (*currentSignalRegistry)[name] = Signal(name, 10000, PlaybackMode::ONLINE);
                 printf("[Lua] Created signal: %s\n", name.c_str());
             }
         });
