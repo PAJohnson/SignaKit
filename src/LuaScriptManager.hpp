@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <cstring>
 #include "types.hpp"
+#include "ui_state.hpp"
 
 namespace fs = std::filesystem;
 
@@ -93,6 +94,71 @@ public:
         // Tier 3: Get plot count (for monitoring GUI state)
         lua.set_function("get_plot_count", [this]() -> int {
             return currentPlotCount;
+        });
+
+        // Tier 4: Control element state access API
+        // Button controls
+        lua.set_function("get_button_clicked", [this](const std::string& buttonTitle) -> bool {
+            if (currentUIPlotState == nullptr) return false;
+            for (const auto& button : currentUIPlotState->activeButtons) {
+                if (button.title == buttonTitle) {
+                    return button.clicked;
+                }
+            }
+            return false;
+        });
+
+        // Toggle controls
+        lua.set_function("get_toggle_state", [this](const std::string& toggleTitle) -> bool {
+            if (currentUIPlotState == nullptr) return false;
+            for (const auto& toggle : currentUIPlotState->activeToggles) {
+                if (toggle.title == toggleTitle) {
+                    return toggle.state;
+                }
+            }
+            return false;
+        });
+
+        lua.set_function("set_toggle_state", [this](const std::string& toggleTitle, bool state) {
+            if (currentUIPlotState == nullptr) return;
+            for (auto& toggle : currentUIPlotState->activeToggles) {
+                if (toggle.title == toggleTitle) {
+                    toggle.state = state;
+                    return;
+                }
+            }
+        });
+
+        // Text input controls
+        lua.set_function("get_text_input", [this](const std::string& inputTitle) -> sol::optional<std::string> {
+            if (currentUIPlotState == nullptr) return sol::nullopt;
+            for (const auto& textInput : currentUIPlotState->activeTextInputs) {
+                if (textInput.title == inputTitle) {
+                    return std::string(textInput.textBuffer);
+                }
+            }
+            return sol::nullopt;
+        });
+
+        lua.set_function("get_text_input_enter_pressed", [this](const std::string& inputTitle) -> bool {
+            if (currentUIPlotState == nullptr) return false;
+            for (const auto& textInput : currentUIPlotState->activeTextInputs) {
+                if (textInput.title == inputTitle) {
+                    return textInput.enterPressed;
+                }
+            }
+            return false;
+        });
+
+        lua.set_function("set_text_input", [this](const std::string& inputTitle, const std::string& text) {
+            if (currentUIPlotState == nullptr) return;
+            for (auto& textInput : currentUIPlotState->activeTextInputs) {
+                if (textInput.title == inputTitle) {
+                    strncpy(textInput.textBuffer, text.c_str(), sizeof(textInput.textBuffer) - 1);
+                    textInput.textBuffer[sizeof(textInput.textBuffer) - 1] = '\0';
+                    return;
+                }
+            }
         });
     }
 
@@ -237,15 +303,18 @@ public:
     // frameNumber: current frame number
     // deltaTime: time since last frame in seconds
     // plotCount: number of active plots
+    // uiPlotState: UI state for accessing control elements (Tier 4)
     void executeFrameCallbacks(std::map<std::string, Signal>& signalRegistry,
                               uint64_t frameNumber,
                               double deltaTime,
-                              int plotCount) {
+                              int plotCount,
+                              UIPlotState* uiPlotState = nullptr) {
         // Set frame context
         currentSignalRegistry = &signalRegistry;
         currentFrameNumber = frameNumber;
         currentDeltaTime = deltaTime;
         currentPlotCount = plotCount;
+        currentUIPlotState = uiPlotState;
 
         // Execute all frame callbacks
         for (auto& func : frameCallbacks) {
@@ -265,6 +334,7 @@ public:
 
         // Clear context
         currentSignalRegistry = nullptr;
+        currentUIPlotState = nullptr;
     }
 
     // Get list of loaded scripts
@@ -368,6 +438,9 @@ private:
     uint64_t currentFrameNumber = 0;
     double currentDeltaTime = 0.0;
     int currentPlotCount = 0;
+
+    // Tier 4: Pointer to UI state for control element access (set during executeFrameCallbacks)
+    UIPlotState* currentUIPlotState = nullptr;
 
     // Helper functions for endianness conversion
     template<typename T>

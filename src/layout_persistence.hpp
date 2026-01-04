@@ -171,10 +171,17 @@ inline bool SaveLayout(const std::string &filename,
                       const std::vector<XYPlotWindow> &xyPlots,
                       const std::vector<HistogramWindow> &histograms,
                       const std::vector<FFTWindow> &ffts,
-                      const std::vector<SpectrogramWindow> &spectrograms) {
+                      const std::vector<SpectrogramWindow> &spectrograms,
+                      const std::vector<ButtonControl> &buttons = std::vector<ButtonControl>(),
+                      const std::vector<ToggleControl> &toggles = std::vector<ToggleControl>(),
+                      const std::vector<TextInputControl> &textInputs = std::vector<TextInputControl>(),
+                      bool editMode = true) {
   try {
     YAML::Emitter out;
     out << YAML::BeginMap;
+
+    // Save UI settings
+    out << YAML::Key << "editMode" << YAML::Value << editMode;
 
     // Save plots
     out << YAML::Key << "plots" << YAML::Value << YAML::BeginSeq;
@@ -308,6 +315,64 @@ inline bool SaveLayout(const std::string &filename,
     }
     out << YAML::EndSeq;
 
+    // Save buttons (Tier 4)
+    out << YAML::Key << "buttons" << YAML::Value << YAML::BeginSeq;
+    for (const auto &button : buttons) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << button.id;
+      out << YAML::Key << "title" << YAML::Value << button.title;
+      out << YAML::Key << "buttonLabel" << YAML::Value << button.buttonLabel;
+      if (button.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << button.posX;
+        out << YAML::Key << "posY" << YAML::Value << button.posY;
+      }
+      if (button.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << button.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << button.sizeY;
+      }
+      out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+
+    // Save toggles (Tier 4)
+    out << YAML::Key << "toggles" << YAML::Value << YAML::BeginSeq;
+    for (const auto &toggle : toggles) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << toggle.id;
+      out << YAML::Key << "title" << YAML::Value << toggle.title;
+      out << YAML::Key << "toggleLabel" << YAML::Value << toggle.toggleLabel;
+      out << YAML::Key << "state" << YAML::Value << toggle.state;
+      if (toggle.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << toggle.posX;
+        out << YAML::Key << "posY" << YAML::Value << toggle.posY;
+      }
+      if (toggle.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << toggle.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << toggle.sizeY;
+      }
+      out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+
+    // Save text inputs (Tier 4)
+    out << YAML::Key << "textInputs" << YAML::Value << YAML::BeginSeq;
+    for (const auto &textInput : textInputs) {
+      out << YAML::BeginMap;
+      out << YAML::Key << "id" << YAML::Value << textInput.id;
+      out << YAML::Key << "title" << YAML::Value << textInput.title;
+      out << YAML::Key << "textBuffer" << YAML::Value << std::string(textInput.textBuffer);
+      if (textInput.posX >= 0.0f) {
+        out << YAML::Key << "posX" << YAML::Value << textInput.posX;
+        out << YAML::Key << "posY" << YAML::Value << textInput.posY;
+      }
+      if (textInput.sizeX >= 0.0f) {
+        out << YAML::Key << "sizeX" << YAML::Value << textInput.sizeX;
+        out << YAML::Key << "sizeY" << YAML::Value << textInput.sizeY;
+      }
+      out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+
     out << YAML::EndMap;
 
     std::ofstream fout(filename);
@@ -332,12 +397,21 @@ inline bool LoadLayout(const std::string &filename,
                       std::vector<XYPlotWindow> &xyPlots, int &nextXYPlotId,
                       std::vector<HistogramWindow> &histograms, int &nextHistogramId,
                       std::vector<FFTWindow> &ffts, int &nextFFTId,
-                      std::vector<SpectrogramWindow> &spectrograms, int &nextSpectrogramId) {
+                      std::vector<SpectrogramWindow> &spectrograms, int &nextSpectrogramId,
+                      std::vector<ButtonControl> *buttons = nullptr, int *nextButtonId = nullptr,
+                      std::vector<ToggleControl> *toggles = nullptr, int *nextToggleId = nullptr,
+                      std::vector<TextInputControl> *textInputs = nullptr, int *nextTextInputId = nullptr,
+                      bool *editMode = nullptr) {
   try {
     YAML::Node config = YAML::LoadFile(filename);
     if (!config["plots"]) {
       fprintf(stderr, "Invalid layout file: missing 'plots' key\n");
       return false;
+    }
+
+    // Load UI settings
+    if (config["editMode"] && editMode != nullptr) {
+      *editMode = config["editMode"].as<bool>();
     }
 
     std::vector<PlotWindow> loadedPlots;
@@ -520,6 +594,93 @@ inline bool LoadLayout(const std::string &filename,
       }
     }
 
+    // Load buttons (Tier 4, if present)
+    std::vector<ButtonControl> loadedButtons;
+    int maxButtonId = 0;
+    if (config["buttons"] && buttons != nullptr && nextButtonId != nullptr) {
+      for (const auto &buttonNode : config["buttons"]) {
+        ButtonControl button;
+        button.id = buttonNode["id"].as<int>();
+        button.title = buttonNode["title"].as<std::string>();
+        button.buttonLabel = buttonNode["buttonLabel"] ? buttonNode["buttonLabel"].as<std::string>() : "Click me!";
+        button.isOpen = true;
+
+        if (buttonNode["posX"]) {
+          button.posX = buttonNode["posX"].as<float>();
+          button.posY = buttonNode["posY"].as<float>();
+        }
+        if (buttonNode["sizeX"]) {
+          button.sizeX = buttonNode["sizeX"].as<float>();
+          button.sizeY = buttonNode["sizeY"].as<float>();
+        }
+
+        loadedButtons.push_back(button);
+        if (button.id > maxButtonId) {
+          maxButtonId = button.id;
+        }
+      }
+    }
+
+    // Load toggles (Tier 4, if present)
+    std::vector<ToggleControl> loadedToggles;
+    int maxToggleId = 0;
+    if (config["toggles"] && toggles != nullptr && nextToggleId != nullptr) {
+      for (const auto &toggleNode : config["toggles"]) {
+        ToggleControl toggle;
+        toggle.id = toggleNode["id"].as<int>();
+        toggle.title = toggleNode["title"].as<std::string>();
+        toggle.toggleLabel = toggleNode["toggleLabel"] ? toggleNode["toggleLabel"].as<std::string>() : "Enable";
+        toggle.state = toggleNode["state"] ? toggleNode["state"].as<bool>() : false;
+        toggle.isOpen = true;
+
+        if (toggleNode["posX"]) {
+          toggle.posX = toggleNode["posX"].as<float>();
+          toggle.posY = toggleNode["posY"].as<float>();
+        }
+        if (toggleNode["sizeX"]) {
+          toggle.sizeX = toggleNode["sizeX"].as<float>();
+          toggle.sizeY = toggleNode["sizeY"].as<float>();
+        }
+
+        loadedToggles.push_back(toggle);
+        if (toggle.id > maxToggleId) {
+          maxToggleId = toggle.id;
+        }
+      }
+    }
+
+    // Load text inputs (Tier 4, if present)
+    std::vector<TextInputControl> loadedTextInputs;
+    int maxTextInputId = 0;
+    if (config["textInputs"] && textInputs != nullptr && nextTextInputId != nullptr) {
+      for (const auto &textInputNode : config["textInputs"]) {
+        TextInputControl textInput;
+        textInput.id = textInputNode["id"].as<int>();
+        textInput.title = textInputNode["title"].as<std::string>();
+        textInput.isOpen = true;
+
+        if (textInputNode["textBuffer"]) {
+          std::string bufferText = textInputNode["textBuffer"].as<std::string>();
+          strncpy(textInput.textBuffer, bufferText.c_str(), sizeof(textInput.textBuffer) - 1);
+          textInput.textBuffer[sizeof(textInput.textBuffer) - 1] = '\0';
+        }
+
+        if (textInputNode["posX"]) {
+          textInput.posX = textInputNode["posX"].as<float>();
+          textInput.posY = textInputNode["posY"].as<float>();
+        }
+        if (textInputNode["sizeX"]) {
+          textInput.sizeX = textInputNode["sizeX"].as<float>();
+          textInput.sizeY = textInputNode["sizeY"].as<float>();
+        }
+
+        loadedTextInputs.push_back(textInput);
+        if (textInput.id > maxTextInputId) {
+          maxTextInputId = textInput.id;
+        }
+      }
+    }
+
     plots = loadedPlots;
     readouts = loadedReadouts;
     xyPlots = loadedXYPlots;
@@ -532,6 +693,21 @@ inline bool LoadLayout(const std::string &filename,
     nextHistogramId = maxHistogramId + 1;
     nextFFTId = maxFFTId + 1;
     nextSpectrogramId = maxSpectrogramId + 1;
+
+    // Assign control elements if pointers are provided
+    if (buttons != nullptr && nextButtonId != nullptr) {
+      *buttons = loadedButtons;
+      *nextButtonId = maxButtonId + 1;
+    }
+    if (toggles != nullptr && nextToggleId != nullptr) {
+      *toggles = loadedToggles;
+      *nextToggleId = maxToggleId + 1;
+    }
+    if (textInputs != nullptr && nextTextInputId != nullptr) {
+      *textInputs = loadedTextInputs;
+      *nextTextInputId = maxTextInputId + 1;
+    }
+
     printf("Layout loaded from: %s\n", filename.c_str());
     return true;
   } catch (const std::exception &e) {

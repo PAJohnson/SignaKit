@@ -119,7 +119,7 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
   }
 
   if (ImGui::BeginMainMenuBar()) {
-    if (ImGui::BeginMenu("File")) {
+    if (ImGui::BeginMenu("Menu")) {
       if (ImGui::MenuItem("Save Layout")) {
         IGFD::FileDialogConfig config;
         config.path = ".";
@@ -130,6 +130,8 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
         config.path = ".";
         ImGuiFileDialog::Instance()->OpenDialog("OpenLayoutDlg", "Open Layout", ".yaml", config);
       }
+      ImGui::Separator();
+      ImGui::MenuItem("Edit Mode", nullptr, &uiPlotState.editMode);
       ImGui::Separator();
       if (ImGui::MenuItem("Close")) {
         appRunning = false;
@@ -350,6 +352,28 @@ inline void RenderSignalBrowser(UIPlotState& uiPlotState, float menuBarHeight) {
       newSpectrogram.title = "Spectrogram " + std::to_string(newSpectrogram.id);
       newSpectrogram.signalName = ""; // Empty initially
       uiPlotState.activeSpectrograms.push_back(newSpectrogram);
+    }
+    ImGui::Separator();
+    // Tier 4: Control Elements
+    if (ImGui::MenuItem("Button")) {
+      ButtonControl newButton;
+      newButton.id = uiPlotState.nextButtonId++;
+      newButton.title = "Button " + std::to_string(newButton.id);
+      newButton.buttonLabel = "Click me!";
+      uiPlotState.activeButtons.push_back(newButton);
+    }
+    if (ImGui::MenuItem("Toggle")) {
+      ToggleControl newToggle;
+      newToggle.id = uiPlotState.nextToggleId++;
+      newToggle.title = "Toggle " + std::to_string(newToggle.id);
+      newToggle.toggleLabel = "Enable";
+      uiPlotState.activeToggles.push_back(newToggle);
+    }
+    if (ImGui::MenuItem("Text Input")) {
+      TextInputControl newTextInput;
+      newTextInput.id = uiPlotState.nextTextInputId++;
+      newTextInput.title = "Text Input " + std::to_string(newTextInput.id);
+      uiPlotState.activeTextInputs.push_back(newTextInput);
     }
     ImGui::EndPopup();
   }
@@ -1344,7 +1368,7 @@ inline void RenderFileDialogs(UIPlotState& uiPlotState) {
   if (ImGuiFileDialog::Instance()->Display("SaveLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      SaveLayout(filePathName, uiPlotState.activePlots, uiPlotState.activeReadoutBoxes, uiPlotState.activeXYPlots, uiPlotState.activeHistograms, uiPlotState.activeFFTs, uiPlotState.activeSpectrograms);
+      SaveLayout(filePathName, uiPlotState.activePlots, uiPlotState.activeReadoutBoxes, uiPlotState.activeXYPlots, uiPlotState.activeHistograms, uiPlotState.activeFFTs, uiPlotState.activeSpectrograms, uiPlotState.activeButtons, uiPlotState.activeToggles, uiPlotState.activeTextInputs, uiPlotState.editMode);
     }
     ImGuiFileDialog::Instance()->Close();
   }
@@ -1353,7 +1377,7 @@ inline void RenderFileDialogs(UIPlotState& uiPlotState) {
   if (ImGuiFileDialog::Instance()->Display("OpenLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLayout(filePathName, uiPlotState.activePlots, uiPlotState.nextPlotId, uiPlotState.activeReadoutBoxes, uiPlotState.nextReadoutBoxId, uiPlotState.activeXYPlots, uiPlotState.nextXYPlotId, uiPlotState.activeHistograms, uiPlotState.nextHistogramId, uiPlotState.activeFFTs, uiPlotState.nextFFTId, uiPlotState.activeSpectrograms, uiPlotState.nextSpectrogramId)) {
+      if (LoadLayout(filePathName, uiPlotState.activePlots, uiPlotState.nextPlotId, uiPlotState.activeReadoutBoxes, uiPlotState.nextReadoutBoxId, uiPlotState.activeXYPlots, uiPlotState.nextXYPlotId, uiPlotState.activeHistograms, uiPlotState.nextHistogramId, uiPlotState.activeFFTs, uiPlotState.nextFFTId, uiPlotState.activeSpectrograms, uiPlotState.nextSpectrogramId, &uiPlotState.activeButtons, &uiPlotState.nextButtonId, &uiPlotState.activeToggles, &uiPlotState.nextToggleId, &uiPlotState.activeTextInputs, &uiPlotState.nextTextInputId, &uiPlotState.editMode)) {
         // Layout loaded successfully
       }
     }

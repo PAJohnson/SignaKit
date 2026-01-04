@@ -122,3 +122,56 @@ struct SpectrogramWindow {
   float sizeX = -1.0f;
   float sizeY = -1.0f;
 };
+
+// -------------------------------------------------------------------------
+// CONTROL ELEMENT DATA STRUCTURES (Tier 4)
+// -------------------------------------------------------------------------
+// These structures represent interactive GUI control elements that expose
+// their state to Lua frame callbacks.
+
+// Represents one Button control element
+struct ButtonControl {
+  int id;
+  std::string title;          // Window title (editable)
+  std::string buttonLabel;    // Button text (editable)
+  bool isOpen = true;
+  bool clicked = false;       // State exposed to Lua - true for one frame after click
+  bool wasClickedLastFrame = false; // Internal state to reset clicked flag
+
+  // Window position and size (for layout persistence)
+  float posX = -1.0f;
+  float posY = -1.0f;
+  float sizeX = -1.0f;
+  float sizeY = -1.0f;
+};
+
+// Represents one Toggle control element
+struct ToggleControl {
+  int id;
+  std::string title;          // Window title (editable)
+  std::string toggleLabel;    // Toggle text (editable)
+  bool isOpen = true;
+  bool state = false;         // Toggle state exposed to Lua
+
+  // Window position and size (for layout persistence)
+  float posX = -1.0f;
+  float posY = -1.0f;
+  float sizeX = -1.0f;
+  float sizeY = -1.0f;
+};
+
+// Represents one Text Input control element
+struct TextInputControl {
+  int id;
+  std::string title;          // Window title (editable)
+  bool isOpen = true;
+  char textBuffer[256] = "";  // Input text exposed to Lua
+  bool enterPressed = false;  // True for one frame after Enter is pressed
+  bool wasEnterPressedLastFrame = false; // Internal state to reset enterPressed flag
+
+  // Window position and size (for layout persistence)
+  float posX = -1.0f;
+  float posY = -1.0f;
+  float sizeX = -1.0f;
+  float sizeY = -1.0f;
+};

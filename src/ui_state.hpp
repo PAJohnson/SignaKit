@@ -34,4 +34,17 @@ struct UIPlotState {
   // Spectrograms
   std::vector<SpectrogramWindow> activeSpectrograms;
   int nextSpectrogramId = 1;
+
+  // Control elements (Tier 4)
+  std::vector<ButtonControl> activeButtons;
+  int nextButtonId = 1;
+
+  std::vector<ToggleControl> activeToggles;
+  int nextToggleId = 1;
+
+  std::vector<TextInputControl> activeTextInputs;
+  int nextTextInputId = 1;
+
+  // UI Settings
+  bool editMode = true; // When true, show Title/Label editing fields in control elements
 };

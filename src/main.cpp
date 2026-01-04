@@ -103,6 +103,9 @@ static auto lastFrameTime = std::chrono::high_resolution_clock::now();
 // Include plot rendering functions (must come after all global state definitions)
 #include "plot_rendering.hpp"
 
+// Include control element rendering functions (Tier 4)
+#include "control_rendering.hpp"
+
 // -------------------------------------------------------------------------
 // NETWORK THREAD
 // -------------------------------------------------------------------------
@@ -293,7 +296,7 @@ void MainLoopStep(void *arg) {
                         uiPlotState.activeFFTs.size() +
                         uiPlotState.activeSpectrograms.size());
 
-  luaScriptManager.executeFrameCallbacks(signalRegistry, frameNumber, deltaTime, totalPlots);
+  luaScriptManager.executeFrameCallbacks(signalRegistry, frameNumber, deltaTime, totalPlots, &uiPlotState);
 
   // Get menu bar height
   float menuBarHeight = ImGui::GetFrameHeight();
@@ -337,6 +340,13 @@ void MainLoopStep(void *arg) {
   // UI: SPECTROGRAMS
   // ---------------------------------------------------------
   RenderSpectrograms(uiPlotState, menuBarHeight);
+
+  // ---------------------------------------------------------
+  // UI: CONTROL ELEMENTS (Tier 4)
+  // ---------------------------------------------------------
+  RenderButtonControls(uiPlotState, menuBarHeight);
+  RenderToggleControls(uiPlotState, menuBarHeight);
+  RenderTextInputControls(uiPlotState, menuBarHeight);
 
   // ---------------------------------------------------------
   // UI: TIME SLIDER (Offline Mode Only)
