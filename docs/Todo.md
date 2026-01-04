@@ -213,8 +213,676 @@ The user should be able to right click on "Button 1" and be able to type in the 
 - The default naming/renaming ability needs to be possible for text input areas and toggles.
 - The intent is that the User can create dynamic control portions of the GUI. For example, a text input might be labeled "PID P Gain", and when a Button called "Send Gains" is clicked, a Frame Callback runs that then checks for the state of the button "Clicked" and parses the value in the "PID P Gain" text area, then sends that gain to a device over Serial or UDP or some other method (Handling of comms from Lua to be figured out later)
 
-### 🔄 TODO: Tier 5 - Timers & Async Operations
-- Timer registration (one-shot and cyclic)
-- Heartbeat/keep-alive signal support
-- Timer callbacks with access to GUI state
-- Integration with network transmission for periodic packets
+### 🔄 TODO: Tier 5 - Total Luafication
+
+**Goal**: Move all network I/O handling to Lua, making C++ responsible only for rendering, GUI management, and Lua script execution. This enables ultimate flexibility for different protocols (UDP, TCP, Serial, HTTP, ZeroMQ, etc.) without recompilation.
+
+**Architecture After Tier 5:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ C++ Core (main.cpp)                                             │
+├─────────────────────────────────────────────────────────────────┤
+│ • SDL/ImGui rendering loop (60 FPS)                            │
+│ • Signal registry management (stateMutex)                      │
+│ • Plot/Control rendering (plot_rendering.hpp)                 │
+│ • LuaScriptManager (execute frame callbacks)                  │
+│ • Thread management API (create_lua_thread, stop_lua_thread)  │
+│ • Simplified menu bar (no network fields)                      │
+└─────────────────────────────────────────────────────────────────┘
+        ↕ (Signal Registry + Mutex)
+┌─────────────────────────────────────────────────────────────────┐
+│ Lua I/O Thread (scripts/io/UDPDataSink.lua)                    │
+├─────────────────────────────────────────────────────────────────┤
+│ • LuaSocket: socket.udp() → sock:receivefrom()                │
+│ • Buffer → parse in Lua → update_signal()                     │
+│ • Logging to file (optional)                                   │
+│ • Reconnection logic, error handling                           │
+│ • Configurable via GUI text inputs/buttons                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Phase 1: Lua Threading API ⭐ **CRITICAL**
+
+**Objective**: Expose C++ threading primitives to Lua so scripts can create I/O worker threads.
+
+**Implementation:**
+
+**1.1 Add Threading Functions to LuaScriptManager**
+
+File: `src/LuaScriptManager.hpp`
+
+```cpp
+class LuaScriptManager {
+private:
+    std::vector<std::thread> luaThreads;
+    std::atomic<bool> threadsRunning{true};
+    std::mutex threadVectorMutex;
+
+public:
+    // Thread management API
+    int createLuaThread(sol::function luaFunc);
+    void stopLuaThread(int threadId);
+    void stopAllLuaThreads();
+
+    // Thread-safe utilities
+    void sleepMs(int milliseconds);
+    bool isAppRunning();  // Expose appRunning atomic
+};
+```
+
+**Lua API exposed:**
+```lua
+-- Create a background thread that runs Lua function
+threadId = create_thread(function()
+    while is_app_running() do
+        -- I/O operations here
+        sleep_ms(10)
+    end
+end)
+
+-- Stop a specific thread
+stop_thread(threadId)
+```
+
+**Key considerations:**
+- Each Lua thread gets its own `sol::state` (Lua states are NOT thread-safe)
+- Threads share `signalRegistry` via existing `stateMutex`
+- Thread lifecycle: C++ `std::thread` wrapping Lua function
+- Cleanup: `stopAllLuaThreads()` called on app shutdown
+
+**Files to modify:**
+- `src/LuaScriptManager.hpp` - Add thread management methods
+- `src/main.cpp` - Call `stopAllLuaThreads()` before exit
+
+---
+
+#### Phase 2: LuaSocket Integration ⭐ **CRITICAL**
+
+**Objective**: Statically link LuaSocket library to enable UDP/TCP I/O from Lua.
+
+**Implementation:**
+
+**2.1 Add LuaSocket to Build System**
+
+File: `CMakeLists.txt`
+
+```cmake
+# Fetch LuaSocket
+include(FetchContent)
+FetchContent_Declare(
+    luasocket
+    GIT_REPOSITORY https://github.com/lunarmodules/luasocket.git
+    GIT_TAG v3.1.0
+)
+FetchContent_MakeAvailable(luasocket)
+
+# Link statically
+target_link_libraries(Telemetry_GUI PRIVATE
+    luasocket_static  # Static linkage
+    ws2_32            # Windows sockets (already present)
+)
+```
+
+**2.2 Register LuaSocket in Lua State**
+
+File: `src/LuaScriptManager.hpp`
+
+```cpp
+void LuaScriptManager::initializeLua() {
+    // Existing sol2 initialization...
+
+    // Register LuaSocket modules
+    lua.require("socket", luaopen_socket_core);
+    lua.require("socket.udp", luaopen_socket_core);
+    lua.require("socket.tcp", luaopen_socket_core);
+}
+```
+
+**2.3 Test LuaSocket Availability**
+
+Create: `scripts/io/socket_test.lua`
+```lua
+local socket = require("socket")
+print("LuaSocket version: " .. socket._VERSION)
+
+-- Test UDP socket creation
+local udp = socket.udp()
+assert(udp, "Failed to create UDP socket")
+udp:close()
+print("LuaSocket: UDP socket test passed")
+```
+
+**Alternatives if LuaSocket doesn't work:**
+- **Custom C++ bindings** using sol2 (more control, more code)
+- **lua-http** for HTTP-only use cases
+- **ZeroMQ Lua bindings** for advanced messaging
+
+**Files to modify:**
+- `CMakeLists.txt` - Add FetchContent for LuaSocket
+- `src/LuaScriptManager.hpp` - Register socket module
+- `scripts/io/socket_test.lua` - Create test script
+
+---
+
+#### Phase 3: Lua I/O Script Template
+
+**Objective**: Create `UDPDataSink.lua` that replicates current C++ functionality.
+
+**Implementation:**
+
+**3.1 Create UDPDataSink.lua**
+
+File: `scripts/io/UDPDataSink.lua`
+
+```lua
+local socket = require("socket")
+
+-- Configuration (will be read from GUI text inputs)
+local IP = get_text_input("UDP IP") or "127.0.0.1"
+local PORT = tonumber(get_text_input("UDP Port")) or 12345
+local PARSER_NAME = "legacy_binary"  -- or from dropdown
+
+-- State
+local udpSocket = nil
+local logFile = nil
+local connected = false
+
+-- Connect function (called when "Connect" button clicked)
+local function connect()
+    if connected then return end
+
+    -- Create UDP socket
+    udpSocket = socket.udp()
+    assert(udpSocket, "Failed to create UDP socket")
+
+    -- Bind to IP:PORT
+    local success, err = udpSocket:setsockname(IP, PORT)
+    if not success then
+        print("Failed to bind socket: " .. tostring(err))
+        udpSocket:close()
+        udpSocket = nil
+        return false
+    end
+
+    -- Set non-blocking mode
+    udpSocket:settimeout(0)
+
+    -- Open log file (optional)
+    logFile = io.open("packet_log.bin", "wb")
+
+    connected = true
+    print("Connected to UDP " .. IP .. ":" .. PORT)
+    return true
+end
+
+-- Disconnect function
+local function disconnect()
+    if udpSocket then
+        udpSocket:close()
+        udpSocket = nil
+    end
+    if logFile then
+        logFile:close()
+        logFile = nil
+    end
+    connected = false
+    print("Disconnected")
+end
+
+-- Main I/O loop (runs in separate thread)
+local function io_loop()
+    while is_app_running() do
+        -- Check if user clicked Connect button
+        if get_button_clicked("UDP Connect") then
+            connect()
+        end
+
+        -- Check if user clicked Disconnect button
+        if get_button_clicked("UDP Disconnect") then
+            disconnect()
+        end
+
+        -- If connected, receive and parse packets
+        if connected and udpSocket then
+            local data, err = udpSocket:receive()
+
+            if data then
+                -- Log raw packet
+                if logFile then
+                    logFile:write(data)
+                    logFile:flush()
+                end
+
+                -- Parse packet using selected Lua parser
+                local parser = require("parsers." .. PARSER_NAME)
+                if parser and parser.parse then
+                    parser.parse(data, #data)
+                end
+            elseif err ~= "timeout" then
+                print("Socket error: " .. tostring(err))
+                disconnect()
+            end
+
+            sleep_ms(1)  -- Small sleep to avoid CPU spinning
+        else
+            sleep_ms(100)  -- Longer sleep when disconnected
+        end
+    end
+
+    disconnect()  -- Cleanup on exit
+end
+
+-- Start the I/O thread
+create_thread(io_loop)
+```
+
+**Key features:**
+- Replicates exact logic from `src/DataSinks/UDPDataSink.hpp`
+- Reads IP/Port from GUI text inputs (Tier 4 controls)
+- Connect/Disconnect via GUI buttons
+- Non-blocking socket operations
+- Optional packet logging
+- Calls existing Lua parsers from Tier 2
+- Runs in separate thread to avoid blocking GUI
+
+**Files to create:**
+- `scripts/io/UDPDataSink.lua` - Main I/O script
+- `scripts/io/README.md` - Documentation
+
+---
+
+#### Phase 4: Remove C++ Network Code
+
+**Objective**: Eliminate NetworkReceiverThread and hardcoded menu bar controls.
+
+**Implementation:**
+
+**4.1 Remove NetworkReceiverThread**
+
+File: `src/main.cpp`
+
+```cpp
+// DELETE LINES 113-224 (entire NetworkReceiverThread function)
+
+// DELETE LINE 477:
+// std::thread receiver(NetworkReceiverThread);
+
+// DELETE LINE 486:
+// receiver.join();
+```
+
+**4.2 Remove Hardcoded Network Controls**
+
+File: `src/plot_rendering.hpp`
+
+In `RenderMenuBar()`:
+- **DELETE lines 242-254** (IP/Port text inputs)
+- **DELETE lines 256-272** (Connect/Disconnect button)
+- **DELETE lines 205-236** (Online/Offline mode toggles)
+- **KEEP lines 181-199** (Parser selection dropdown - still useful)
+
+**4.3 Clean Up Global Variables**
+
+File: `src/main.cpp`
+
+```cpp
+// DELETE these globals (no longer needed):
+// std::atomic<bool> networkConnected(false);
+// std::atomic<bool> networkShouldConnect(false);
+// std::string networkIP = "127.0.0.1";
+// int networkPort = 12345;
+// std::mutex networkConfigMutex;
+```
+
+**4.4 Remove DataSink Classes (Optional)**
+
+Since all I/O is in Lua now:
+- `src/DataSinks/DataSink.hpp` - Can be deleted
+- `src/DataSinks/UDPDataSink.hpp` - Can be deleted
+- OR keep them as reference/fallback
+
+**Files to modify:**
+- `src/main.cpp` - Remove NetworkReceiverThread, globals
+- `src/plot_rendering.hpp` - Remove network menu controls
+
+---
+
+#### Phase 5: Default Control Panel Script
+
+**Objective**: Create a default Lua script that sets up the standard UDP telemetry interface using Tier 4 controls.
+
+**Dependencies**: **Requires Tier 4 GUI Control Elements to be complete**
+
+**Implementation:**
+
+**5.1 Create Default Control Panel**
+
+File: `scripts/io/default_control_panel.lua`
+
+```lua
+-- This script runs on startup and creates the default UDP telemetry interface
+-- Users can customize this script for their specific needs
+
+-- Create control elements (only if they don't exist)
+local function setup_controls()
+    -- IP Address text input
+    if not control_exists("UDP IP") then
+        create_text_input("Network Settings", "UDP IP", "127.0.0.1")
+    end
+
+    -- Port text input
+    if not control_exists("UDP Port") then
+        create_text_input("Network Settings", "UDP Port", "12345")
+    end
+
+    -- Connect button
+    if not control_exists("UDP Connect") then
+        create_button("Network Settings", "UDP Connect")
+    end
+
+    -- Disconnect button
+    if not control_exists("UDP Disconnect") then
+        create_button("Network Settings", "UDP Disconnect")
+    end
+
+    -- Connection status display
+    if not control_exists("Connection Status") then
+        create_text_display("Network Settings", "Connection Status", "Disconnected")
+    end
+end
+
+setup_controls()
+```
+
+**Note:** This requires Tier 4 to expose `control_exists()`, `create_text_input()`, `create_button()`, etc. If not yet implemented, this phase can be deferred.
+
+**Files to create:**
+- `scripts/io/default_control_panel.lua`
+
+---
+
+#### Phase 6: Extended Lua API
+
+**Objective**: Add missing APIs needed for full Lua I/O control.
+
+**Implementation:**
+
+**6.1 File I/O and Timing Functions**
+
+File: `src/LuaScriptManager.hpp`
+
+```cpp
+void LuaScriptManager::exposeLuaAPI() {
+    // Existing APIs...
+
+    // Thread API (from Phase 1)
+    lua.set_function("create_thread", &LuaScriptManager::createLuaThread, this);
+    lua.set_function("stop_thread", &LuaScriptManager::stopLuaThread, this);
+    lua.set_function("sleep_ms", &LuaScriptManager::sleepMs, this);
+    lua.set_function("is_app_running", &LuaScriptManager::isAppRunning, this);
+
+    // File operations (Lua already has io.*, but add binary helpers)
+    lua.set_function("log_packet_binary", &LuaScriptManager::logPacketBinary, this);
+
+    // Timer functions (for interval-based I/O)
+    lua.set_function("get_time_seconds", []() {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+    });
+}
+```
+
+**6.2 Parser Loading Helper**
+
+File: `scripts/io/helpers.lua`
+
+```lua
+-- Helper to load parser by name
+function load_parser(parserName)
+    local path = "scripts.parsers." .. parserName
+    local success, parser = pcall(require, path)
+    if success then
+        return parser
+    else
+        print("Failed to load parser: " .. parserName)
+        return nil
+    end
+end
+```
+
+**Files to modify:**
+- `src/LuaScriptManager.hpp` - Add new API functions
+- `scripts/io/helpers.lua` - Create utility functions
+
+---
+
+#### Phase 7: Testing & Migration
+
+**Objective**: Verify that Lua I/O matches or exceeds C++ performance and functionality.
+
+**Implementation:**
+
+**7.1 Performance Benchmark**
+
+File: `scripts/io/benchmark.lua`
+
+```lua
+-- Benchmark Lua socket performance vs C++ UDPDataSink
+local socket = require("socket")
+local udp = socket.udp()
+udp:setsockname("127.0.0.1", 12345)
+udp:settimeout(0)
+
+local packetCount = 0
+local startTime = get_time_seconds()
+
+-- Run for 10 seconds
+while get_time_seconds() - startTime < 10 do
+    local data, err = udp:receive()
+    if data then
+        packetCount = packetCount + 1
+        -- Minimal parsing to measure overhead
+        local timestamp = readDouble(data, 0)
+        update_signal("benchmark", timestamp, 1.0)
+    end
+end
+
+local elapsed = get_time_seconds() - startTime
+local packetsPerSec = packetCount / elapsed
+local bytesPerSec = packetsPerSec * 128  -- Assume 128 byte packets
+
+print(string.format("Benchmark: %.0f packets/sec, %.2f MB/s",
+      packetsPerSec, bytesPerSec / 1e6))
+```
+
+**Performance Target**: Must achieve 10 MB/s (100,000 packets/sec @ 100 bytes each)
+
+**7.2 Functional Equivalence Test**
+
+Test plan:
+1. Run C++ version (current) and capture signals to CSV
+2. Run Lua version (`UDPDataSink.lua`) with same input stream
+3. Diff CSV outputs - must be identical
+
+**7.3 Example Alternative Protocols**
+
+Create examples showing flexibility:
+
+File: `scripts/io/TCPDataSink.lua`
+```lua
+-- TCP streaming example
+local socket = require("socket")
+local tcp = socket.tcp()
+tcp:connect("192.168.1.100", 8080)
+-- ... TCP receive loop
+```
+
+File: `scripts/io/HTTPPoller.lua`
+```lua
+-- Poll REST API every N seconds
+local http = require("socket.http")
+while is_app_running() do
+    local body = http.request("http://api.example.com/telemetry")
+    -- Parse JSON and update signals
+    sleep_ms(1000)
+end
+```
+
+File: `scripts/io/SerialDataSink.lua`
+```lua
+-- Serial port example (requires luars232 or similar)
+-- Demonstrates flexibility beyond UDP/TCP
+```
+
+**Files to create:**
+- `scripts/io/benchmark.lua` - Performance testing
+- `scripts/io/TCPDataSink.lua` - TCP example
+- `scripts/io/HTTPPoller.lua` - HTTP polling example
+- `scripts/io/SerialDataSink.lua` - Serial example (if library available)
+
+---
+
+#### Phase 8: Documentation
+
+**Objective**: Document Tier 5 architecture, migration guide, and API reference.
+
+**Implementation:**
+
+**8.1 Create Comprehensive Documentation**
+
+File: `docs/LuaTotalLuafication.md`
+
+**Contents:**
+1. **Overview** - What changed, why Lua I/O is powerful
+2. **Architecture** - Thread model, signal registry access
+3. **Migration Guide** - Converting C++ DataSinks to Lua scripts
+4. **API Reference**:
+   - `create_thread(func)` - Spawn Lua worker thread
+   - `sleep_ms(ms)` - Sleep for milliseconds
+   - `is_app_running()` - Check if app is still running
+   - `get_time_seconds()` - High-resolution timestamp
+   - LuaSocket usage patterns
+5. **Performance** - Benchmarks, optimization tips
+6. **Examples** - UDP, TCP, HTTP, Serial
+7. **Troubleshooting** - Common issues, debugging
+
+**8.2 Update Main README**
+
+File: `scripts/README.md`
+
+Add section:
+```markdown
+## I/O Scripts (scripts/io/)
+Custom network/serial data acquisition scripts that replace C++ I/O code.
+Enables UDP, TCP, HTTP, Serial, ZeroMQ, and custom protocols without recompilation.
+
+See docs/LuaTotalLuafication.md for complete guide.
+```
+
+**Files to create:**
+- `docs/LuaTotalLuafication.md` - Comprehensive Tier 5 documentation
+- `scripts/io/README.md` - Quick reference guide
+
+---
+
+### Critical Dependencies & Risks
+
+#### Dependency: Tier 4 Completion
+Tier 5 relies heavily on GUI Control Elements (Tier 4):
+- Text inputs for IP/Port configuration
+- Buttons for Connect/Disconnect
+- Control state queries in Lua
+
+**Mitigation**: Tier 5 Phase 4-5 can be deferred until Tier 4 is complete. Phases 1-3 can proceed independently.
+
+#### Risk: LuaSocket Static Linking
+LuaSocket may have challenges with static linkage on Windows.
+
+**Mitigation Options:**
+1. Use FetchContent with custom CMake flags for static build
+2. Create custom C++ socket bindings using sol2 (more work, more control)
+3. Use header-only alternatives (lua-http, civetweb with Lua bindings)
+
+**Testing plan**: Phase 2 includes `socket_test.lua` to validate early
+
+#### Risk: Performance Degradation
+Lua I/O may be slower than C++ socket operations.
+
+**Mitigation:**
+- Benchmarking in Phase 7 validates performance
+- LuaJIT can be swapped in if vanilla Lua is too slow
+- Critical path (signal updates) remains in C++
+- Non-blocking I/O prevents GUI freezing
+
+**Performance budget**: 10 µs per packet @ 100K packets/sec = 1 second of CPU. Lua should handle this easily.
+
+#### Risk: Thread Safety
+Lua states are not thread-safe; signal registry access must be synchronized.
+
+**Mitigation:**
+- Each Lua thread gets its own `sol::state`
+- `update_signal()` already locks `stateMutex` internally
+- Existing locking strategy from Tier 2 applies
+
+---
+
+### Recommended Implementation Order
+
+1. ✅ **Phase 2** - LuaSocket Integration (validates feasibility early)
+2. ✅ **Phase 1** - Lua Threading API (enables background I/O)
+3. ✅ **Phase 3** - UDPDataSink.lua (proves concept)
+4. ✅ **Phase 7** - Testing & Benchmarks (validate performance)
+5. ⏳ **Wait for Tier 4 completion** (GUI controls must exist first)
+6. ✅ **Phase 5** - Default Control Panel (requires Tier 4)
+7. ✅ **Phase 4** - Remove C++ Network Code (final cutover)
+8. ✅ **Phase 6** - Extended Lua API (polish)
+9. ✅ **Phase 8** - Documentation (finalize)
+
+---
+
+### Files Modified/Created Summary
+
+#### Modified:
+- `CMakeLists.txt` - Add LuaSocket dependency
+- `src/LuaScriptManager.hpp` - Add thread API, socket registration, timer functions
+- `src/main.cpp` - Remove NetworkReceiverThread, remove network globals, add thread cleanup
+- `src/plot_rendering.hpp` - Remove hardcoded network menu controls (IP/Port/Connect/Disconnect)
+
+#### Deleted (optional):
+- `src/DataSinks/DataSink.hpp` - No longer needed (all I/O in Lua)
+- `src/DataSinks/UDPDataSink.hpp` - Replaced by `scripts/io/UDPDataSink.lua`
+
+#### Created:
+- `scripts/io/UDPDataSink.lua` - Main UDP I/O script (Lua equivalent of C++ UDPDataSink)
+- `scripts/io/default_control_panel.lua` - Default GUI controls for network config
+- `scripts/io/socket_test.lua` - LuaSocket validation test
+- `scripts/io/benchmark.lua` - Performance benchmark (target: 10 MB/s)
+- `scripts/io/TCPDataSink.lua` - TCP streaming example
+- `scripts/io/HTTPPoller.lua` - HTTP REST API polling example
+- `scripts/io/SerialDataSink.lua` - Serial port example (if library available)
+- `scripts/io/helpers.lua` - Utility functions for parser loading
+- `scripts/io/README.md` - Quick reference guide
+- `docs/LuaTotalLuafication.md` - Comprehensive Tier 5 documentation
+
+---
+
+### Success Criteria
+
+✅ LuaSocket statically linked and functional
+✅ `create_thread()` API works, Lua I/O runs in background
+✅ `UDPDataSink.lua` replicates C++ functionality exactly
+✅ Performance meets 10 MB/s target (benchmarked)
+✅ No hardcoded network controls in C++ menu bar
+✅ NetworkReceiverThread fully removed from `main.cpp`
+✅ Single binary executable still ships (static linkage maintained)
+✅ Documentation complete with migration guide and examples
+✅ Example scripts for UDP, TCP, HTTP demonstrate protocol flexibility
+
+---
+
+**Status**: 🔄 **TODO** - Awaiting Tier 4 completion for full implementation
+
+**Result**: C++ becomes purely a rendering engine and GUI framework, while Lua handles all I/O, parsing, and control logic. The telemetry application can now adapt to any protocol (UDP, TCP, Serial, HTTP, ZeroMQ, custom) without recompilation.
