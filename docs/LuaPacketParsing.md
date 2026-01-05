@@ -419,7 +419,7 @@ end
 ## Performance Considerations
 
 ### Execution Context
-- Parsers run in the **network receiver thread** under `stateMutex` lock
+- Parsers run in the **main thread during frame callbacks** under `stateMutex` lock
 - Called for **every received packet** (~100Hz typical, up to 100kHz possible)
 - Keep parser execution time **< 10 µs** to avoid backlog
 

@@ -28,27 +28,35 @@ The project consists of three main executables:
 │              Telemetry GUI Application                   │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐ │
-│  │  Network Receiver Thread                           │ │
-│  │  - Binds to UDP port 5000                          │ │
-│  │  - Receives raw packet buffers                     │ │
-│  │  - Matches packets by size and header string       │ │
-│  │  - Extracts fields using configured offsets/types  │ │
-│  │  - Stores (time, value) pairs in Signal buffers    │ │
-│  └────────────────┬───────────────────────────────────┘ │
-│                   │                                      │
-│                   │ Thread-safe access via mutex         │
-│                   ▼                                      │
+│  │  Main GUI Thread (60 FPS)                          │ │
+│  │  ┌──────────────────────────────────────────────┐ │ │
+│  │  │  Lua Frame Callbacks                         │ │ │
+│  │  │  - scripts/io/DataSource.lua                 │ │ │
+│  │  │  - Non-blocking UDP socket receive           │ │ │
+│  │  │  - Calls Lua parsers with raw bytes          │ │ │
+│  │  └──────────────────┬───────────────────────────┘ │ │
+│  │                     │                              │ │
+│  │                     ▼                              │ │
+│  │  ┌──────────────────────────────────────────────┐ │ │
+│  │  │  Lua Parsers (scripts/parsers/*.lua)         │ │ │
+│  │  │  - Extract fields from raw bytes             │ │ │
+│  │  │  - update_signal() to store data             │ │ │
+│  │  └──────────────────┬───────────────────────────┘ │ │
+│  └────────────────────┬┴───────────────────────────────┘ │
+│                       │                                  │
+│                       ▼                                  │
 │  ┌────────────────────────────────────────────────────┐ │
-│  │  Signal Registry (std::map<string, Signal>)        │ │
+│  │  Signal Registry (C++)                             │ │
 │  │  - "IMU.accelX" -> {dataX[], dataY[], offset}      │ │
 │  │  - "IMU.accelY" -> ...                             │ │
 │  │  - "GPS.latitude" -> ...                           │ │
+│  │  - Protected by stateMutex                         │ │
 │  └────────────────┬───────────────────────────────────┘ │
 │                   │                                      │
-│                   │ Read by GUI thread                   │
+│                   │ Read by GUI rendering                │
 │                   ▼                                      │
 │  ┌────────────────────────────────────────────────────┐ │
-│  │  Main GUI Thread (ImGui/ImPlot)                    │ │
+│  │  GUI Rendering (ImGui/ImPlot)                      │ │
 │  │  ┌──────────────────┐  ┌──────────────────────┐   │ │
 │  │  │  Signal Browser  │  │  Plot Windows        │   │ │
 │  │  │  - List all      │  │  - Multiple plots    │   │ │
@@ -58,6 +66,10 @@ The project consists of three main executables:
 │  └────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Note**: As of Tier 5 (Total Luafication), all network I/O is handled by Lua scripts
+running as frame callbacks. See [docs/LuaTotalLuafication.md](LuaTotalLuafication.md)
+for details.
 
 ## Component Details
 
@@ -75,20 +87,26 @@ The project consists of three main executables:
 
 **Main Components**:
 
-- **NetworkReceiverThread** (`src/main.cpp:106-197`)
-  - Runs in background thread
-  - Loads `signals.yaml` configuration
-  - Initializes signal registry
-  - Receives UDP packets on port 5000
-  - Parses packets based on configuration
-  - Updates signal buffers (thread-safe)
+- **Lua I/O System** (`scripts/io/DataSource.lua`)
+  - Runs as frame callback at 60 FPS
+  - Non-blocking UDP socket operations (via `sockpp` library)
+  - Receives packets and dispatches to Lua parsers
+  - Handles both online (UDP) and offline (file replay) modes
+  - Updates signal buffers via `update_signal()` API
 
-- **Signal Registry** (`src/main.cpp:83`)
+- **Lua Parser System** (`scripts/parsers/*.lua`)
+  - Registered parsers handle different packet types
+  - Extract fields from raw byte buffers
+  - Create/update signals dynamically
+  - See [docs/LuaPacketParsing.md](LuaPacketParsing.md) for details
+
+- **Signal Registry** (`src/ui_state.hpp`)
   - Maps signal names to data buffers
   - Each signal stores X (time) and Y (value) arrays
   - Circular buffer with configurable size (default 2000 samples)
+  - Protected by stateMutex for thread-safe access
 
-- **GUI Rendering** (`src/main.cpp:246-390`)
+- **GUI Rendering** (`src/main.cpp`)
   - Left panel: Signal browser with drag sources
   - Right area: Dynamic plot windows
   - Each plot can contain multiple signals
@@ -96,9 +114,10 @@ The project consists of three main executables:
 
 **Performance Optimizations**:
 - Uses `SDL_WaitEventTimeout()` to reduce CPU usage when idle
-- Mutex-protected data access between network and GUI threads
+- Non-blocking I/O prevents GUI freezing
 - Windows-specific vsync hints for smooth rendering
 - Static linking for portable executables
+- All I/O in Lua allows rapid protocol adaptation without recompilation
 
 ### 2. mock_device
 
@@ -378,19 +397,25 @@ Also update in `src/mock_device.cpp:21`:
 
 ## Thread Safety
 
-The application uses two threads:
+The application uses a single-threaded architecture with frame callbacks:
 
-1. **Network Receiver Thread** - Receives UDP packets, parses data, updates signal registry
-2. **Main GUI Thread** - Renders UI, handles user input, reads signal data
+1. **Main GUI Thread** - Handles everything at 60 FPS:
+   - GUI rendering (ImGui/ImPlot)
+   - Lua frame callbacks (including I/O via DataSource.lua)
+   - Signal registry access
+   - User input
 
 **Synchronization**:
 - `std::mutex stateMutex` protects the signal registry
-- `std::lock_guard` used for automatic lock/unlock
-- Network thread holds lock while updating data
-- GUI thread holds lock during rendering
+- Lua frame callbacks execute with `stateMutex` held
+- All signal updates and reads are mutex-protected
+- Non-blocking I/O prevents frame drops
 
-**Atomic Variables**:
-- `std::atomic<bool> appRunning` for clean shutdown
+**Benefits**:
+- Simpler architecture (no thread coordination)
+- No race conditions or deadlocks
+- Easier debugging
+- Sufficient performance (60 FPS × 100 packets/frame = 6000+ packets/sec)
 
 ## Performance Characteristics
 
@@ -402,7 +427,7 @@ The application uses two threads:
 ### CPU Usage
 - Near-zero when idle (thanks to `SDL_WaitEventTimeout`)
 - ~1-5% during active plotting on modern hardware
-- Network thread minimal overhead
+- Non-blocking I/O minimal overhead
 
 ### Latency
 - Sub-millisecond from packet arrival to display update

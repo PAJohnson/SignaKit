@@ -11,7 +11,7 @@ The Telemetry GUI supports extensibility through Lua scripts via the sol2 librar
 - **Hot Reload**: Reload scripts on-the-fly without restarting the application
 - **Auto-loading**: Scripts in the `scripts/` directory are loaded at startup
 - **Manual Loading**: Load additional scripts via GUI file dialog
-- **Performance**: Lua transforms execute efficiently in the network thread (~10ms interval)
+- **Performance**: Lua transforms execute efficiently during packet processing (~60 FPS)
 - **Stateful Transforms**: Maintain state between transform calls for filters and accumulators
 
 ## Architecture
@@ -19,22 +19,25 @@ The Telemetry GUI supports extensibility through Lua scripts via the sol2 librar
 ### Data Flow
 
 ```
-Network Thread (UDP Packets)
+Main GUI Thread (60 FPS)
     ↓
-Parse Packets → Signal Registry
+Lua I/O Frame Callback (DataSource.lua) → Receive UDP Packets
     ↓
-Execute Lua Transforms → Add Derived Signals
+Lua Parsers → Parse Packets → Signal Registry
     ↓
-GUI Thread (Render at 60 FPS)
+Lua Transforms → Add Derived Signals
+    ↓
+GUI Rendering (Render Plots/Controls)
 ```
 
 ### Transform Execution
 
-1. Network thread receives UDP packet burst
-2. Packets are parsed into the signal registry
-3. **All registered Lua transforms execute** (with mutex lock)
-4. Derived signals are added to the signal registry
-5. GUI thread renders all signals (original + derived)
+1. Main thread executes frame callbacks (~60 FPS)
+2. Lua I/O callback receives packets and calls parsers
+3. Parsers update signals in the signal registry (with mutex lock)
+4. **All registered Lua transforms execute** after packet parsing
+5. Derived signals are added to the signal registry
+6. GUI renders all signals (original + derived)
 
 ## Lua API Reference
 
@@ -105,7 +108,7 @@ Register a function that computes a derived signal.
 - `function` (function): Lua function that returns a number or `nil`
 
 **Notes:**
-- Transform functions are called once per network packet burst (~10ms)
+- Transform functions are called after each packet is parsed
 - Returned values are automatically timestamped and added to the signal registry
 - Returning `nil` skips adding a value for this cycle
 - If the transform function has an error, it's logged and execution continues
@@ -300,7 +303,7 @@ end)
 ## Performance Considerations
 
 ### Execution Frequency
-- Transforms execute in the network thread (~10ms interval in online mode)
+- Transforms execute during packet processing (triggered by Lua parsers)
 - Keep transform functions lightweight (< 1ms execution time)
 - Avoid expensive operations like file I/O in transforms
 

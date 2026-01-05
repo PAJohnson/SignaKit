@@ -555,7 +555,7 @@ Main Render Loop (60 FPS)
 - **Execution Thread:** Main render thread
 - **Mutex:** `stateMutex` is held during callback execution
 - **Signal Access:** Safe - registry locked during frame callbacks
-- **Network Thread:** Cannot modify signals while callbacks run
+- **Lua Parsers:** Cannot modify signals while frame callbacks run (both use stateMutex)
 
 ### Timing Behavior
 
