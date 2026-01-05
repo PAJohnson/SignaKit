@@ -2,6 +2,9 @@
 
 #include "plot_types.hpp"
 #include <vector>
+#include <unordered_set>
+#include <string>
+#include <mutex>
 
 // -------------------------------------------------------------------------
 // UI PLOT STATE MANAGEMENT
@@ -48,4 +51,38 @@ struct UIPlotState {
   // UI Settings
   bool editMode = true; // When true, show Title/Label editing fields in control elements
   bool showMemoryProfiler = false; // Toggle for diagnostic window
+
+  // Tracking for parser optimization
+  std::unordered_set<std::string> activeSignals;
+  std::mutex activeSignalsMutex;
+
+  void refreshActiveSignals() {
+      std::lock_guard<std::mutex> lock(activeSignalsMutex);
+      activeSignals.clear();
+      
+      for (const auto& p : activePlots) {
+          for (const auto& s : p.signalNames) activeSignals.insert(s);
+      }
+      for (const auto& r : activeReadoutBoxes) {
+          if (!r.signalName.empty()) activeSignals.insert(r.signalName);
+      }
+      for (const auto& xy : activeXYPlots) {
+          if (!xy.xSignalName.empty()) activeSignals.insert(xy.xSignalName);
+          if (!xy.ySignalName.empty()) activeSignals.insert(xy.ySignalName);
+      }
+      for (const auto& h : activeHistograms) {
+          if (!h.signalName.empty()) activeSignals.insert(h.signalName);
+      }
+      for (const auto& f : activeFFTs) {
+          if (!f.signalName.empty()) activeSignals.insert(f.signalName);
+      }
+      for (const auto& s : activeSpectrograms) {
+          if (!s.signalName.empty()) activeSignals.insert(s.signalName);
+      }
+  }
+
+  bool isSignalActive(const std::string& name) {
+      std::lock_guard<std::mutex> lock(activeSignalsMutex);
+      return activeSignals.find(name) != activeSignals.end();
+  }
 };

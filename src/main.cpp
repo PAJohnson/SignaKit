@@ -284,6 +284,9 @@ void MainLoopStep(void *arg) {
                      [](const TextInputControl &ti) { return !ti.isOpen; }),
       uiPlotState.activeTextInputs.end());
 
+  // Update active signal set for parser optimization
+  uiPlotState.refreshActiveSignals();
+
   // Render
   ImGui::Render();
   glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
@@ -378,6 +381,7 @@ int main(int, char **) {
   // Load Lua scripts from scripts/ directory
   printf("Loading Lua scripts...\n");
   luaScriptManager.setAppRunningPtr(&appRunning);  // Tier 5: Allow Lua threads to check app status
+  luaScriptManager.setSignalRegistry(&signalRegistry); // Support signal registration on script load
   luaScriptManager.loadScriptsFromDirectory("scripts");
 
   // Scan available parsers for dropdown menu

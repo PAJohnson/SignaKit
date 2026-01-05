@@ -142,6 +142,18 @@ public:
             registerPacketParser(parserName, func);
         });
 
+        // Optimization: Check if a signal is active in the UI
+        lua.set_function("is_signal_active", [this](const std::string& name) -> bool {
+            if (currentUIPlotState == nullptr) return true; // Default to active if we can't check
+            return currentUIPlotState->isSignalActive(name);
+        });
+
+        // Optimization: Check if a packet type has any Lua callbacks registered
+        lua.set_function("has_packet_callback", [this](const std::string& packetType) -> bool {
+            sol::object callbacks = lua["_packet_callbacks"][packetType];
+            return callbacks.valid() && callbacks.get_type() == sol::type::table && callbacks.as<sol::table>().size() > 0;
+        });
+
         // Pure-Lua packet callback system (no C++ storage, eliminates context switches)
         lua.script(R"(
             -- Global registry of packet callbacks (stored in Lua, not C++)
@@ -603,9 +615,13 @@ public:
         return handled;
     }
 
-    // Tier 5: Thread management functions (PUBLIC)
     void setAppRunningPtr(std::atomic<bool>* ptr) {
         appRunningPtr = ptr;
+    }
+
+    // Set a default signal registry to be used when no frame/packet context is active (e.g. at script load)
+    void setSignalRegistry(std::map<std::string, Signal>* registry) {
+        defaultSignalRegistry = registry;
     }
 
     void stopAllLuaThreads() {
@@ -648,8 +664,11 @@ private:
     };
     std::vector<Alert> alerts;
 
-    // Pointer to signal registry (set during executeFrameCallbacks)
+    // Pointer to signal registry (set during executeFrameCallbacks or parsePacket)
     std::map<std::string, Signal>* currentSignalRegistry = nullptr;
+
+    // Default pointer to signal registry (fallback when currentSignalRegistry is null)
+    std::map<std::string, Signal>* defaultSignalRegistry = nullptr;
 
     // Default playback mode for new signals (changed by set_default_signal_mode)
     PlaybackMode defaultSignalMode = PlaybackMode::ONLINE;
@@ -825,28 +844,32 @@ private:
 
         // Signal manipulation functions
         lua.set_function("update_signal", [this](const std::string& name, double timestamp, double value) {
-            if (currentSignalRegistry == nullptr) {
+            std::map<std::string, Signal>* registry = currentSignalRegistry ? currentSignalRegistry : defaultSignalRegistry;
+            
+            if (registry == nullptr) {
                 printf("[Lua] Warning: Cannot update signal '%s' - no active signal registry\n", name.c_str());
                 return;
             }
 
             // Get or create the signal (using default mode)
-            if (currentSignalRegistry->find(name) == currentSignalRegistry->end()) {
-                (*currentSignalRegistry)[name] = Signal(name, 10000, defaultSignalMode);
+            if (registry->find(name) == registry->end()) {
+                (*registry)[name] = Signal(name, 10000, defaultSignalMode);
             }
 
-            Signal& sig = (*currentSignalRegistry)[name];
+            Signal& sig = (*registry)[name];
             sig.AddPoint(timestamp, value);
         });
 
         lua.set_function("create_signal", [this](const std::string& name) {
-            if (currentSignalRegistry == nullptr) {
+            std::map<std::string, Signal>* registry = currentSignalRegistry ? currentSignalRegistry : defaultSignalRegistry;
+
+            if (registry == nullptr) {
                 printf("[Lua] Warning: Cannot create signal '%s' - no active signal registry\n", name.c_str());
                 return;
             }
 
-            if (currentSignalRegistry->find(name) == currentSignalRegistry->end()) {
-                (*currentSignalRegistry)[name] = Signal(name, 10000, PlaybackMode::ONLINE);
+            if (registry->find(name) == registry->end()) {
+                (*registry)[name] = Signal(name, 10000, PlaybackMode::ONLINE);
                 printf("[Lua] Created signal: %s\n", name.c_str());
             }
         });
