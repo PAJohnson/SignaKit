@@ -116,7 +116,7 @@ end)
 
 Signal names use the format: `PACKET.field`
 
-**Available signals** (see `signals.yaml` for complete list):
+**Available signals** (depend on your Lua parsers in `scripts/parsers/`):
 - `IMU.accelX`, `IMU.accelY`, `IMU.accelZ` - Acceleration (m/s²)
 - `IMU.gyroX`, `IMU.gyroY`, `IMU.gyroZ` - Angular velocity (rad/s)
 - `GPS.latitude`, `GPS.longitude`, `GPS.altitude`, `GPS.speed`

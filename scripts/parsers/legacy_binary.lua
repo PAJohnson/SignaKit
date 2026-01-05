@@ -1,8 +1,8 @@
--- Auto-generated parser for legacy binary protocol from signals.yaml
--- This parser maintains backward compatibility with the C++ packet parsing
--- It handles the same packet formats that were previously hardcoded in C++
+-- Parser for legacy binary telemetry protocol
+-- Handles IMU, GPS, Battery, LIDAR, RADAR, State, Debug, and Motor packets
+-- This parser demonstrates the Lua packet parsing API
 
-log("Loading legacy binary parser (auto-generated from signals.yaml)")
+log("Loading legacy binary parser for telemetry protocol")
 
 -- Type mapping helper - converts YAML type names to appropriate read functions
 local function readField(buffer, fieldType, offset)

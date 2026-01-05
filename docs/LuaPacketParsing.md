@@ -471,31 +471,20 @@ collectgarbage("setstepmul", 400)  -- Larger GC steps
 
 ---
 
-## Migration from C++ Parsing (signals.yaml)
+## Creating Custom Parsers
 
-### Automatic Migration
+All packet parsing is now handled by Lua scripts in `scripts/parsers/`. Create a new `.lua` file in that directory and register your parser using the `register_parser()` function.
 
-The `legacy_binary.lua` parser is **auto-generated** from your `signals.yaml` and provides backward compatibility.
+**Parser Priority:**
+- Parsers are tried in the order they register
+- First parser to return `true` wins
+- Return `false` if your parser doesn't recognize the packet
 
-**How it works:**
-1. On startup, Lua scripts are loaded from `scripts/` (including `scripts/parsers/`)
-2. `legacy_binary.lua` registers a parser for all packet types in `signals.yaml`
-3. If no Lua parser handles a packet, C++ falls back to `signals.yaml` parsing
-
-### Gradual Migration Strategy
-
-**Option 1: Keep Both (Recommended)**
-- Lua parsers run first
-- C++ parsing acts as fallback
-- Migrate one packet type at a time
-
-**Option 2: Disable C++ Parsing**
-- Empty your `signals.yaml` packets section
-- All parsing handled by Lua
-
-**Option 3: Hybrid**
-- Use Lua for complex/custom formats
-- Use C++ for simple, high-frequency packets
+**Best Practices:**
+- Check packet header and size before parsing
+- Use descriptive parser names
+- Add logging for debugging
+- Handle endianness explicitly
 
 ---
 
@@ -531,7 +520,7 @@ Create a test script to send known packets via UDP and verify parsing.
 ```
 scripts/
   parsers/
-    legacy_binary.lua       # Auto-generated from signals.yaml (backward compat)
+    legacy_binary.lua       # Binary protocol parser
     my_protocol.lua         # Your custom parser
     json_example.lua        # Example: JSON parsing (disabled by default)
     csv_example.lua         # Example: CSV parsing (disabled by default)

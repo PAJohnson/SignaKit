@@ -1318,18 +1318,6 @@ inline void RenderFileDialogs(UIPlotState& uiPlotState) {
     ImGuiFileDialog::Instance()->Close();
   }
 
-  // Display Open Log File dialog
-  if (ImGuiFileDialog::Instance()->Display("OpenLogFileDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
-    if (ImGuiFileDialog::Instance()->IsOk()) {
-      std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLogFile(filePathName, signalRegistry, offlineState, luaScriptManager)) {
-        // Log file loaded successfully
-        printf("Successfully loaded log file into offline mode\n");
-      }
-    }
-    ImGuiFileDialog::Instance()->Close();
-  }
-
   // Display Load Script dialog
   if (ImGuiFileDialog::Instance()->Display("LoadScriptDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {

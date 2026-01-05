@@ -2,17 +2,16 @@
 
 ## Overview
 
-The Telemetry GUI is a real-time data visualization tool designed to receive packed C struct telemetry data over UDP, parse it dynamically based on YAML configuration, and display it in interactive, draggable plots.
+The Telemetry GUI is a real-time data visualization tool designed to receive packed C struct telemetry data over UDP, parse it using Lua scripts, and display it in interactive, draggable plots.
 
 ## Architecture
 
 ### Components
 
-The project consists of three main executables:
+The project consists of two main executables:
 
 1. **telemetry_gui** - Main GUI application
 2. **mock_device** - Test data generator
-3. **test_loader** - Configuration validation tool
 
 ### Data Flow
 
@@ -78,7 +77,7 @@ for details.
 **Purpose**: Real-time visualization of telemetry data streams.
 
 **Key Features**:
-- Dynamic packet parsing based on YAML configuration
+- Dynamic packet parsing using Lua scripts
 - Live plotting with ImPlot (up to 2000 samples per signal)
 - Drag-and-drop signal assignment to plots
 - Multiple independent plot windows
@@ -141,55 +140,6 @@ for details.
 - GPS: Circular path around NYC coordinates
 - Proper packet headers and time stamps
 
-### 3. test_loader
-
-**Purpose**: Validate YAML configuration file parsing.
-
-**Usage**:
-```bash
-./test_loader
-```
-
-Verifies that `signals.yaml` can be successfully loaded and parsed.
-
-## Configuration System
-
-### signals.yaml Format
-
-The configuration file defines packet structures and signal mappings:
-
-```yaml
-packets:
-  - id: "IMU"                    # Packet identifier
-    header_string: "IMU"         # First bytes of packet (for identification)
-    size_check: 36               # Expected packet size in bytes
-    time_field: "time"           # Which field contains timestamp
-    fields:
-      - {name: "time",   type: "double", offset: 4}
-      - {name: "accelX", type: "float",  offset: 12}
-      - {name: "accelY", type: "float",  offset: 16}
-      - {name: "accelZ", type: "float",  offset: 20}
-      - {name: "gyroX",  type: "float",  offset: 24}
-      - {name: "gyroY",  type: "float",  offset: 28}
-      - {name: "gyroZ",  type: "float",  offset: 32}
-
-  - id: "GPS"
-    header_string: "GPS"
-    size_check: 36
-    time_field: "time"
-    fields:
-      - {name: "time",      type: "double", offset: 4}
-      - {name: "latitude",  type: "double", offset: 12}
-      - {name: "longitude", type: "double", offset: 20}
-      - {name: "altitude",  type: "float",  offset: 28}
-      - {name: "speed",     type: "float",  offset: 32}
-```
-
-**Signal Auto-Generation**:
-- Each non-time field automatically becomes a signal
-- Signal names: `<packet_id>.<field_name>` (e.g., "IMU.accelX")
-- Signals appear in the GUI's signal browser
-
 ## Adding New Data Structures
 
 Follow these steps to add support for a new telemetry packet type:
@@ -220,63 +170,40 @@ struct BatteryData {
 - Pay attention to struct padding and alignment
 - Calculate total struct size: `sizeof(BatteryData)`
 
-### Step 2: Update signals.yaml
+### Step 2: Create a Lua Parser
 
-Add the new packet definition:
+Create a parser script in `scripts/parsers/` directory. For example, `scripts/parsers/battery.lua`:
 
-```yaml
-packets:
-  # ... existing IMU and GPS packets ...
+```lua
+register_parser("Battery", function(buffer, length)
+    -- Check packet header and size
+    local header = readString(buffer, 0, 3)
+    if header ~= "BAT" or length < 26 then
+        return false  -- Not our packet
+    end
 
-  - id: "Battery"
-    header_string: "BAT"
-    size_check: 26              # sizeof(BatteryData)
-    time_field: "time"
-    fields:
-      - {name: "time",        type: "double",  offset: 4}   # After header
-      - {name: "voltage",     type: "float",   offset: 12}
-      - {name: "current",     type: "float",   offset: 16}
-      - {name: "temperature", type: "float",   offset: 20}
-      - {name: "percentage",  type: "uint8_t", offset: 24}
-      - {name: "health",      type: "uint8_t", offset: 25}
-      - {name: "cycleCount",  type: "uint16_t", offset: 26}
+    -- Parse fields
+    local time = readDouble(buffer, 4, true)   -- Little-endian double at offset 4
+    local voltage = readFloat(buffer, 12, true)
+    local current = readFloat(buffer, 16, true)
+    local temperature = readFloat(buffer, 20, true)
+    local percentage = readUInt8(buffer, 24)
+    local health = readUInt8(buffer, 25)
+    local cycleCount = readUInt16(buffer, 26, true)
+
+    -- Update signals
+    update_signal("Battery.voltage", time, voltage)
+    update_signal("Battery.current", time, current)
+    update_signal("Battery.temperature", time, temperature)
+    update_signal("Battery.percentage", time, percentage)
+    update_signal("Battery.health", time, health)
+    update_signal("Battery.cycleCount", time, cycleCount)
+
+    return true  -- Successfully parsed
+end)
 ```
 
-**Field Offsets**:
-- Calculate carefully based on struct layout
-- Use `offsetof()` macro for verification if needed:
-  ```cpp
-  printf("voltage offset: %zu\n", offsetof(BatteryData, voltage));
-  ```
-
-**Supported Types**:
-
-Floating Point:
-- `double` - 8 bytes, double precision floating point
-- `float` - 4 bytes, single precision floating point
-
-Signed Integers (stdint.h):
-- `int8_t` or `int8` - 1 byte, signed integer (-128 to 127)
-- `int16_t` or `int16` - 2 bytes, signed integer (-32,768 to 32,767)
-- `int32_t` or `int32` or `int` - 4 bytes, signed integer (-2^31 to 2^31-1)
-- `int64_t` or `int64` - 8 bytes, signed integer (-2^63 to 2^63-1)
-
-Unsigned Integers (stdint.h):
-- `uint8_t` or `uint8` - 1 byte, unsigned integer (0 to 255)
-- `uint16_t` or `uint16` - 2 bytes, unsigned integer (0 to 65,535)
-- `uint32_t` or `uint32` - 4 bytes, unsigned integer (0 to 2^32-1)
-- `uint64_t` or `uint64` - 8 bytes, unsigned integer (0 to 2^64-1)
-
-Legacy C Types (backwards compatibility):
-- `char` - typically 1 byte, signed or unsigned depending on platform
-- `short` - typically 2 bytes, signed integer
-- `long` - platform-dependent size, signed integer
-- `unsigned char` - typically 1 byte, unsigned integer
-- `unsigned short` - typically 2 bytes, unsigned integer
-- `unsigned int` - typically 4 bytes, unsigned integer
-- `unsigned long` - platform-dependent size, unsigned integer
-
-**Note**: For portability, prefer using the stdint.h types (`int8_t`, `uint32_t`, etc.) as they have guaranteed sizes across platforms.
+See [docs/LuaPacketParsing.md](LuaPacketParsing.md) for complete parser API documentation.
 
 ### Step 3: Update Data Source
 
@@ -320,12 +247,7 @@ batteryThread.join();
 
 ### Step 4: Test
 
-1. **Verify configuration**:
-   ```bash
-   ./test_loader
-   ```
-
-2. **Run the GUI**:
+1. **Run the GUI**:
    ```bash
    ./telemetry_gui
    ```
@@ -437,17 +359,18 @@ The application uses a single-threaded architecture with frame callbacks:
 
 ### No Data Appearing in Plots
 
-1. Check that `signals.yaml` exists in the same directory as the executable
-2. Verify the data source is sending to `127.0.0.1:5000`
-3. Check firewall settings (Windows Firewall may block UDP)
-4. Look for error messages: "Failed to load signals.yaml"
+1. Verify the data source is sending to `127.0.0.1:5000`
+2. Check firewall settings (Windows Firewall may block UDP)
+3. Check console output for Lua parser errors
+4. Verify your parser script is in `scripts/parsers/` directory
 
 ### Signals Not Appearing in Browser
 
-1. Verify packet structure matches `signals.yaml` exactly
-2. Check packet size with `sizeof(YourStruct)`
-3. Ensure header string matches configuration
-4. Verify field offsets are correct
+1. Check console output for parser errors
+2. Verify packet structure matches your Lua parser
+3. Check packet size with `sizeof(YourStruct)`
+4. Ensure header string matches what your parser expects
+5. Add debug logging to your parser with `log()` function
 
 ### Plot Performance Issues
 

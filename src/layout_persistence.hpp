@@ -2,9 +2,9 @@
 
 #include "plot_types.hpp"
 #include "types.hpp"
-#include "SignalConfigLoader.h"
 #include "LuaScriptManager.hpp"
-#include <yaml-cpp/yaml.h>
+// Note: Offline playback is now handled by Lua (scripts/io/DataSource.lua)
+// The LoadLogFile function below is deprecated and kept for compatibility only
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -13,6 +13,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 
 // Forward declarations (these are defined in main.cpp)
 struct OfflinePlaybackState;
@@ -39,135 +40,6 @@ inline std::string GenerateLogFilename() {
       << std::setw(2) << tm_utc.tm_sec
       << ".bin";
   return oss.str();
-}
-
-// Helper to load a binary log file and populate signal registry
-// NOTE: Caller must hold stateMutex before calling this function
-inline bool LoadLogFile(const std::string &filename,
-                       std::map<std::string, Signal>& signalRegistry,
-                       OfflinePlaybackState& offlineState,
-                       LuaScriptManager& luaScriptManager) {
-  std::ifstream file(filename, std::ios::binary | std::ios::ate);
-  if (!file.is_open()) {
-    fprintf(stderr, "Failed to open log file: %s\n", filename.c_str());
-    return false;
-  }
-
-  // Get file size
-  std::streamsize fileSize = file.tellg();
-  file.seekg(0, std::ios::beg);
-
-  printf("Loading log file: %s (%lld bytes)\n", filename.c_str(), (long long)fileSize);
-
-  // Load packet definitions
-  std::vector<PacketDefinition> packets;
-  if (!SignalConfigLoader::Load("signals.yaml", packets)) {
-    fprintf(stderr, "Failed to load signals.yaml for offline playback\n");
-    return false;
-  }
-
-  // Clear existing signal registry and reinitialize for offline mode
-  // NOTE: Caller must already hold stateMutex
-  signalRegistry.clear();
-  for (const auto &pkt : packets) {
-    for (const auto &sig : pkt.signals) {
-      signalRegistry[sig.key] = Signal(sig.key, 100000, PlaybackMode::OFFLINE);
-    }
-  }
-
-  // Read and parse the entire file
-  char buffer[1024];
-  int packetsProcessed = 0;
-  double minTime = std::numeric_limits<double>::max();
-  double maxTime = std::numeric_limits<double>::lowest();
-
-  std::streampos currentPos = 0;
-  file.seekg(0, std::ios::beg);
-
-  while (currentPos < fileSize) {
-    // Read a chunk at current position
-    file.seekg(currentPos);
-    std::streamsize remainingBytes = fileSize - currentPos;
-    std::streamsize bytesToRead = std::min(remainingBytes, (std::streamsize)sizeof(buffer));
-
-    file.read(buffer, bytesToRead);
-    std::streamsize bytesRead = file.gcount();
-
-    if (bytesRead == 0) {
-      printf("Warning: Failed to read at position %lld\n", (long long)currentPos);
-      break;
-    }
-
-    // Try to match packet by header string
-    bool matched = false;
-    for (const PacketDefinition &pkt : packets) {
-      if (bytesRead >= (std::streamsize)pkt.sizeCheck &&
-          strncmp(buffer, pkt.headerString.c_str(), pkt.headerString.length()) == 0) {
-
-        // Matched packet! Process all signals
-        // NOTE: Caller already holds stateMutex
-        for (const auto &sig : pkt.signals) {
-          double t = ReadValue(buffer, sig.timeType, sig.timeOffset);
-          double v = ReadValue(buffer, sig.type, sig.offset);
-
-          // Update signal registry (no lock needed - caller holds it)
-          signalRegistry[sig.key].AddPoint(t, v);
-
-          // Track time range
-          if (t < minTime) minTime = t;
-          if (t > maxTime) maxTime = t;
-        }
-
-        // Execute Lua packet callbacks via trigger_packet_callbacks() (NOTE: caller holds stateMutex)
-        // Get the timestamp from the first signal
-        double packetTime = 0.0;
-        if (!pkt.signals.empty()) {
-          packetTime = ReadValue(buffer, pkt.signals[0].timeType, pkt.signals[0].timeOffset);
-        }
-
-        // Call Lua trigger_packet_callbacks(packetType, timestamp)
-        luaScriptManager.getLuaState().safe_script(
-          "if trigger_packet_callbacks then trigger_packet_callbacks('" + pkt.id + "', " + std::to_string(packetTime) + ") end"
-        );
-
-        packetsProcessed++;
-        matched = true;
-
-        // Advance to next packet
-        currentPos += pkt.sizeCheck;
-        break;
-      }
-    }
-
-    if (!matched) {
-      // Unknown data, skip one byte and try again
-      currentPos += 1;
-    }
-
-    // Progress indicator every 10000 packets
-    if (packetsProcessed % 10000 == 0 && packetsProcessed > 0) {
-      printf("Progress: %d packets processed (%.1f%%)...\n",
-             packetsProcessed,
-             100.0 * currentPos / fileSize);
-    }
-  }
-
-  file.close();
-  printf("Parsing complete.\n");
-
-  // Update offline playback state
-  offlineState.minTime = minTime;
-  offlineState.maxTime = maxTime;
-  offlineState.currentWindowStart = minTime;
-  offlineState.windowWidth = maxTime - minTime;  // Show entire file initially
-  offlineState.fileLoaded = true;
-  offlineState.loadedFilePath = filename;
-
-  printf("Log file loaded: %d packets processed\n", packetsProcessed);
-  printf("Time range: %.3f - %.3f seconds (duration: %.3f s)\n",
-         minTime, maxTime, maxTime - minTime);
-
-  return true;
 }
 
 // -------------------------------------------------------------------------

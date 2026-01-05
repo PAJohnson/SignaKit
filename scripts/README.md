@@ -100,4 +100,4 @@ Common packets and their signals:
 - **STATE**: mode, armed, status, errorCode, uptime, cpuUsage, memoryUsage
 - **MOTOR**: rpm, torque, power, temperature, throttle, faults, rotations
 
-Check the `signals.yaml` file for the complete list of available signals.
+Check the signal browser in the GUI or console output for the complete list of available signals (dynamically created by Lua parsers).

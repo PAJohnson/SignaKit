@@ -30,7 +30,9 @@ The build system automatically fetches the following dependencies via CMake Fetc
 - **SDL2** - Cross-platform windowing and input
 - **ImGui** (docking branch) - Immediate mode GUI framework
 - **ImPlot** - Real-time plotting library for ImGui
-- **yaml-cpp** - YAML configuration file parser
+- **sol2** - C++ Lua bindings
+- **sockpp** - Modern C++ socket library for Lua network I/O
+- **pffft** - Optimized FFT library for spectrograms
 
 All dependencies are built statically for maximum portability.
 
@@ -91,18 +93,16 @@ cmake .. -G "MSYS Makefiles" \
 
 ## Build Targets
 
-The build system produces three executables:
+The build system produces two executables:
 
 - **telemetry_gui** - Main GUI application for real-time telemetry visualization
 - **mock_device** - Mock data generator for testing (sends simulated IMU and GPS data)
-- **test_loader** - Unit test for YAML signal configuration loader
 
 ### Building Individual Targets
 
 ```bash
 cmake --build . --target telemetry_gui
 cmake --build . --target mock_device
-cmake --build . --target test_loader
 ```
 
 ## Build Configuration
@@ -118,7 +118,7 @@ All executables are statically linked for maximum portability. This means:
 
 The build system automatically copies required resources to the build directory:
 - `Roboto-Medium.ttf` - Font file for ImGui
-- `signals.yaml` - Signal configuration file
+- `scripts/` - Lua scripts directory (parsers, transforms, callbacks)
 
 ## Troubleshooting
 

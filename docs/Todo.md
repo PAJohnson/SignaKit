@@ -64,7 +64,7 @@ Signal Registry (C++) → Shared state for plotting
 - [x] Update main.cpp to pass LuaScriptManager to UDPDataSink
 
 **Phase 4: Migration & Backward Compatibility** ✅
-- [x] Create `scripts/parsers/legacy_binary.lua` - Auto-generated equivalent of signals.yaml
+- [x] Create `scripts/parsers/legacy_binary.lua` - Binary packet parser
 - [x] Support all packet types: IMU, GPS, Battery, LIDAR, RADAR, State, Debug, Motor
 - [x] Enable recursive script loading from subdirectories
 - [x] Maintain C++ fallback for gradual migration
@@ -96,7 +96,7 @@ Signal Registry (C++) → Shared state for plotting
 ```
 scripts/
   parsers/
-    legacy_binary.lua       # Auto-generated from signals.yaml
+    legacy_binary.lua       # Binary packet parser
     json_telemetry.lua      # Custom JSON parser
     custom_protocol.lua     # User-defined formats
   transforms/
@@ -129,7 +129,7 @@ scripts/
 - Error handling with sol::protected_function
 - Memory-safe buffer copying
 
-**Status**: ✅ **PRODUCTION READY** - All 5 phases complete. Backward compatible with existing signals.yaml parsing.
+**Status**: ✅ **PRODUCTION READY** - All 5 phases complete. All packet parsing in Lua.
 
 **Next Steps**: Test compilation, then consider Tier 3 (Frame Callbacks & Monitoring)
 

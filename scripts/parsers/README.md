@@ -13,10 +13,10 @@ This directory contains Lua scripts that parse raw packet data from network/seri
 
 ### Production Parsers
 
-- **`legacy_binary.lua`** - Auto-generated parser for backward compatibility with `signals.yaml`
+- **`legacy_binary.lua`** - Binary packet parser for the legacy telemetry protocol
   - Handles all packet types: IMU, GPS, Battery, LIDAR, RADAR, State, Debug, Motor
   - Enabled by default
-  - Provides seamless migration from C++ parsing
+  - Demonstrates the Lua packet parsing API
 
 ### Example Parsers (Disabled by Default)
 

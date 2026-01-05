@@ -173,7 +173,6 @@ set(IMGUIFILEDIALOG_SOURCES
 # Create main executable
 add_executable(telemetry_gui
     src/main.cpp
-    src/SignalConfigLoader.cpp
     ${IMGUI_SOURCES}
     ${IMPLOT_SOURCES}
     ${IMGUIFILEDIALOG_SOURCES}
@@ -204,9 +203,6 @@ add_custom_command(TARGET telemetry_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf
         ${CMAKE_CURRENT_BINARY_DIR}/Roboto-Medium.ttf
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/signals.yaml
-        ${CMAKE_CURRENT_BINARY_DIR}/signals.yaml
 )
 
 # Make telemetry_gui depend on the copy_scripts target
@@ -234,13 +230,6 @@ target_link_libraries(telemetry_gui PRIVATE
 set_target_properties(telemetry_gui PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
 
 # Test executables
-add_executable(test_loader
-    src/test_loader.cpp
-    src/SignalConfigLoader.cpp
-)
-target_include_directories(test_loader PRIVATE src)
-target_link_libraries(test_loader PRIVATE yaml-cpp)
-
 add_executable(struct_size_test src/struct_size_test.cpp)
 target_include_directories(struct_size_test PRIVATE src)
 

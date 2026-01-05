@@ -340,7 +340,7 @@ Signals follow the format: `PACKET.field`
 
 ### Common Packet Types
 
-See `signals.yaml` for the complete, up-to-date list of available signals.
+Available signals depend on your Lua parsers in `scripts/parsers/`. Check the console output or signal browser for the complete list.
 
 **IMU** (Inertial Measurement Unit):
 - accelX, accelY, accelZ (m/s²)
@@ -406,12 +406,12 @@ Parse any packet format (binary, JSON, CSV, Protobuf, encrypted, etc.) without r
 - Signal manipulation: `update_signal`, `create_signal`
 - Parser registration: `register_parser(name, function)`
 - Endianness handling (little/big-endian)
-- Auto-generated backward compatibility with signals.yaml
+- Parser-defined signal creation
 
 **Documentation:** See `docs/LuaPacketParsing.md` for complete API reference and examples.
 
 **Example parsers:**
-- `scripts/parsers/legacy_binary.lua` - Auto-generated from signals.yaml
+- `scripts/parsers/legacy_binary.lua` - Binary packet parser
 - `scripts/parsers/json_example.lua` - JSON parsing example
 - `scripts/parsers/csv_example.lua` - CSV parsing example
 

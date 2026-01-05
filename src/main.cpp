@@ -28,8 +28,7 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// Network Includes (now handled in Lua via UDPDataSink.lua)
-#include "SignalConfigLoader.h"
+// Network Includes (now handled in Lua via DataSource.lua)
 
 // DPI Awareness
 #include <windows.h>
