@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include "pffft.h"
 
 // -------------------------------------------------------------------------
 // PLOT WINDOW DATA STRUCTURES
@@ -126,9 +127,36 @@ struct SpectrogramWindow {
   std::vector<double> cachedTimeBins;
   std::vector<double> cachedFreqBins;
   std::vector<double> cachedMagnitudeMatrix;
+  std::vector<double> transposedMagnitudeMatrix; // Format: [freq][time] for ImPlot::PlotHeatmap
   size_t cachedDataSize = 0; // Size of data when cache was computed
+  int cachedOffset = -1;     // Circular buffer offset when computed
+  double cachedWindowStart = -1.0; // Offline window start when computed
+  double cachedWindowWidth = -1.0; // Offline window width when computed
+  int cachedFftSize = -1;
+  int cachedHopSize = -1;
+  bool cachedLogScale = false;
+  bool cachedUseHanning = false;
+  int cachedMaxFrequency = -1;
+  double cachedFs = 0.0;
   double lastComputeTime = 0.0; // Time when last computed
   double updateThrottleSeconds = 0.1; // Minimum seconds between updates (10 FPS max)
+
+  // Worker buffers to avoid allocations in hot path
+  std::vector<double> analyzerData;
+  std::vector<double> analyzerTime;
+  std::vector<float> magnitudesFloat;
+  
+  // Aligned buffers for pffft (managed manually to ensure SIMD alignment)
+  float* pffft_work = nullptr;
+  float* pffft_output = nullptr;
+  float* pffft_input = nullptr;
+  int pffft_buffer_size = 0;
+
+  ~SpectrogramWindow() {
+    if (pffft_work) pffft_aligned_free(pffft_work);
+    if (pffft_output) pffft_aligned_free(pffft_output);
+    if (pffft_input) pffft_aligned_free(pffft_input);
+  }
 };
 
 // -------------------------------------------------------------------------

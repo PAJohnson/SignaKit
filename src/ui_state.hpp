@@ -47,4 +47,5 @@ struct UIPlotState {
 
   // UI Settings
   bool editMode = true; // When true, show Title/Label editing fields in control elements
+  bool showMemoryProfiler = false; // Toggle for diagnostic window
 };

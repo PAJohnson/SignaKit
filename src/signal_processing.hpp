@@ -89,6 +89,29 @@ inline void ApplyHanningWindow(std::vector<float>& data) {
 }
 
 // Optimized FFT using pffft library (SIMD-accelerated)
+// Version that uses pre-allocated buffers for maximum performance in loops
+inline void ComputeRealFFT_Direct(PFFFT_Setup* setup, float* inputCopy, float* output, float* work, std::vector<float>& magnitudes) {
+  int N = magnitudes.size() * 2; // Reconstruction of N
+
+  // Perform forward FFT
+  pffft_transform_ordered(setup, inputCopy, output, work, PFFFT_FORWARD);
+
+  // Extract magnitude spectrum
+  int numBins = N / 2;
+  // magnitudes is assumed to be correctly sized
+
+  // DC component (bin 0)
+  magnitudes[0] = fabsf(output[0]);
+
+  // Regular bins 1 to N/2-1
+  for (int k = 1; k < numBins; k++) {
+    float real = output[2 * k];
+    float imag = output[2 * k + 1];
+    magnitudes[k] = sqrtf(real * real + imag * imag);
+  }
+}
+
+// Optimized FFT using pffft library (SIMD-accelerated)
 // Input: real-valued signal in 'input' (size N)
 // Returns magnitude spectrum (first N/2 bins only, since input is real)
 inline void ComputeRealFFT(const std::vector<float>& input, std::vector<float>& magnitudes) {
@@ -101,10 +124,9 @@ inline void ComputeRealFFT(const std::vector<float>& input, std::vector<float>& 
     return;
   }
 
-  // Get cached pffft setup (expensive to create, so we cache and reuse)
+  // Get cached pffft setup
   PFFFT_Setup* setup = GetCachedPFFTSetup(N);
   if (!setup) {
-    fprintf(stderr, "Failed to create pffft setup for size %d\n", N);
     magnitudes.clear();
     return;
   }
@@ -117,28 +139,8 @@ inline void ComputeRealFFT(const std::vector<float>& input, std::vector<float>& 
   // Copy input data
   memcpy(inputCopy, input.data(), N * sizeof(float));
 
-  // Perform forward FFT
-  // pffft_transform_ordered for PFFFT_REAL produces:
-  // [DC, r1, r2, ..., r(N/2-1), Nyquist, i(N/2-1), ..., i2, i1]
-  // where DC and Nyquist are purely real
-  pffft_transform_ordered(setup, inputCopy, output, work, PFFFT_FORWARD);
-
-  // Extract magnitude spectrum
-  int numBins = N / 2;
-  magnitudes.resize(numBins);
-
-  // DC component (bin 0)
-  magnitudes[0] = fabsf(output[0]);
-
-  // Regular bins 1 to N/2-1
-  // After testing, pffft real format appears to be:
-  // [r0, r(N/2), r1, i1, r2, i2, ..., r(N/2-1), i(N/2-1)]
-  // This is "interleaved" format after the first two elements
-  for (int k = 1; k < numBins; k++) {
-    float real = output[2 * k];
-    float imag = output[2 * k + 1];
-    magnitudes[k] = sqrtf(real * real + imag * imag);
-  }
+  magnitudes.resize(N / 2);
+  ComputeRealFFT_Direct(setup, inputCopy, output, work, magnitudes);
 
   // Free aligned memory
   pffft_aligned_free(work);
@@ -344,20 +346,22 @@ inline ImU32 GetColormapColor(Colormap colormap, double t) {
 
 // Compute spectrogram from signal data using Short-Time Fourier Transform (STFT)
 // Returns time bins, frequency bins, and 2D magnitude matrix (row-major: [time][freq])
+// Optimized to use pre-allocated buffers from SpectrogramWindow
 inline void ComputeSpectrogram(const std::vector<double>& signalData,
                        const std::vector<double>& timePoints,
-                       int fftSize,
-                       int hopSize,
-                       bool useHanning,
-                       bool logScale,
-                       double timeWindowDuration,
-                       int maxFrequency,
-                       std::vector<double>& timeBins,
-                       std::vector<double>& freqBins,
-                       std::vector<double>& magnitudeMatrix) {
+                       SpectrogramWindow& sw) {
+
+  int fftSize = sw.fftSize;
+  int hopSize = sw.hopSize;
+  bool useHanning = sw.useHanning;
+  bool logScale = sw.logScale;
+  double timeWindowDuration = sw.timeWindow;
+  int maxFrequency = sw.maxFrequency;
+  std::vector<double>& timeBins = sw.cachedTimeBins;
+  std::vector<double>& freqBins = sw.cachedFreqBins;
+  std::vector<double>& magnitudeMatrix = sw.cachedMagnitudeMatrix;
 
   if (signalData.size() < (size_t)fftSize) {
-    // Not enough data
     timeBins.clear();
     freqBins.clear();
     magnitudeMatrix.clear();
@@ -368,16 +372,12 @@ inline void ComputeSpectrogram(const std::vector<double>& signalData,
   double fs = CalculateSamplingFrequency(timePoints, 0, std::min(fftSize, (int)timePoints.size()));
 
   // Determine how many samples to analyze based on time window
-  int numSamplesToAnalyze = signalData.size();
   int dataStartIdx = 0;
+  int numSamplesToAnalyze = signalData.size();
 
   if (timeWindowDuration > 0.0 && !timePoints.empty()) {
-    // Find the time range
     double endTime = timePoints.back();
     double startTime = endTime - timeWindowDuration;
-
-    // Find the start index for this time range
-    dataStartIdx = 0;
     for (size_t i = 0; i < timePoints.size(); i++) {
       if (timePoints[i] >= startTime) {
         dataStartIdx = i;
@@ -385,19 +385,13 @@ inline void ComputeSpectrogram(const std::vector<double>& signalData,
       }
     }
     numSamplesToAnalyze = timePoints.size() - dataStartIdx;
-  } else {
-    // Use all data
-    dataStartIdx = 0;
-    numSamplesToAnalyze = signalData.size();
   }
 
-  // Calculate number of FFT windows that fit in the data
+  // Calculate number of FFT windows
   int numWindows = 0;
   if (numSamplesToAnalyze >= fftSize) {
     numWindows = (numSamplesToAnalyze - fftSize) / hopSize + 1;
   }
-
-  //printf("numWindows %d, numSampleToAnalyze %d\n", numWindows, numSamplesToAnalyze);
 
   if (numWindows <= 0) {
     timeBins.clear();
@@ -406,36 +400,42 @@ inline void ComputeSpectrogram(const std::vector<double>& signalData,
     return;
   }
 
-  // Determine frequency bins
   int numFreqBins = fftSize / 2;
   double freqResolution = fs / fftSize;
-
-  // Apply max frequency limit if specified
   int actualNumFreqBins = numFreqBins;
   if (maxFrequency > 0 && maxFrequency < fs / 2.0) {
     actualNumFreqBins = std::min(numFreqBins, (int)(maxFrequency / freqResolution));
   }
+  if (actualNumFreqBins <= 0) actualNumFreqBins = 1;
 
-  // Ensure we have at least 1 frequency bin
-  if (actualNumFreqBins <= 0) {
-    actualNumFreqBins = 1;
-  }
-
-  // Initialize output arrays
   timeBins.resize(numWindows);
   freqBins.resize(actualNumFreqBins);
   magnitudeMatrix.resize(numWindows * actualNumFreqBins);
 
-  // Fill frequency bins
   for (int i = 0; i < actualNumFreqBins; i++) {
     freqBins[i] = i * freqResolution;
   }
 
-  // Process each FFT window using pffft
+  PFFFT_Setup* setup = GetCachedPFFTSetup(fftSize);
+  if (!setup) return;
+
+  // Manage pffft aligned buffers (resize if needed)
+  if (!sw.pffft_work || sw.pffft_buffer_size != fftSize) {
+    if (sw.pffft_work) pffft_aligned_free(sw.pffft_work);
+    if (sw.pffft_output) pffft_aligned_free(sw.pffft_output);
+    if (sw.pffft_input) pffft_aligned_free(sw.pffft_input);
+    
+    sw.pffft_work = (float*)pffft_aligned_malloc(fftSize * sizeof(float));
+    sw.pffft_output = (float*)pffft_aligned_malloc(fftSize * sizeof(float));
+    sw.pffft_input = (float*)pffft_aligned_malloc(fftSize * sizeof(float));
+    sw.pffft_buffer_size = fftSize;
+  }
+  
+  sw.magnitudesFloat.resize(numFreqBins);
+
   for (int windowIdx = 0; windowIdx < numWindows; windowIdx++) {
     int startIdx = dataStartIdx + windowIdx * hopSize;
 
-    // Get the center time of this window
     int centerIdx = startIdx + fftSize / 2;
     if (centerIdx < (int)timePoints.size()) {
       timeBins[windowIdx] = timePoints[centerIdx];
@@ -443,39 +443,28 @@ inline void ComputeSpectrogram(const std::vector<double>& signalData,
       timeBins[windowIdx] = timePoints.back();
     }
 
-    // Extract window data - convert to float for pffft
-    std::vector<float> windowedData(fftSize);
     for (int i = 0; i < fftSize; i++) {
-      if (startIdx + i < (int)signalData.size()) {
-        windowedData[i] = static_cast<float>(signalData[startIdx + i]);
-      } else {
-        windowedData[i] = 0.0f; // Zero-pad if needed
-      }
+        if (startIdx + i < (int)signalData.size()) {
+            sw.pffft_input[i] = static_cast<float>(signalData[startIdx + i]);
+        } else {
+            sw.pffft_input[i] = 0.0f;
+        }
     }
 
-    // Apply window function if requested
     if (useHanning) {
-      ApplyHanningWindow(windowedData);
+        for (int i = 0; i < fftSize; i++) {
+            float window = 0.5f * (1.0f - cosf(2.0f * M_PI * i / (fftSize - 1)));
+            sw.pffft_input[i] *= window;
+        }
     }
 
-    // Perform FFT using pffft
-    std::vector<float> magnitudesFloat;
-    ComputeRealFFT(windowedData, magnitudesFloat);
+    ComputeRealFFT_Direct(setup, sw.pffft_input, sw.pffft_output, sw.pffft_work, sw.magnitudesFloat);
 
-    // Extract magnitude spectrum and store in matrix
     for (int i = 0; i < actualNumFreqBins; i++) {
-      double mag = static_cast<double>(magnitudesFloat[i]);
-
-      // Normalize by FFT size
-      mag = mag / fftSize;
-
-      // Convert to dB if requested
+      double mag = static_cast<double>(sw.magnitudesFloat[i]) / fftSize;
       if (logScale) {
-        const double epsilon = 1e-10;
-        mag = 20.0 * log10(mag + epsilon);
+        mag = 20.0 * log10(mag + 1e-10);
       }
-
-      // Store in row-major format: magnitudeMatrix[windowIdx * numFreqBins + freqIdx]
       magnitudeMatrix[windowIdx * actualNumFreqBins + i] = mag;
     }
   }

@@ -113,6 +113,7 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
       }
       ImGui::Separator();
       ImGui::MenuItem("Edit Mode", nullptr, &uiPlotState.editMode);
+      ImGui::MenuItem("Memory Profiler", nullptr, &uiPlotState.showMemoryProfiler);
       ImGui::Separator();
       if (ImGui::MenuItem("Close")) {
         appRunning = false;
@@ -184,6 +185,73 @@ inline void RenderMenuBar(UIPlotState& uiPlotState) {
 
     ImGui::EndMainMenuBar();
   }
+}
+
+// -------------------------------------------------------------------------
+// MEMORY PROFILER RENDERING
+// -------------------------------------------------------------------------
+inline void RenderMemoryProfiler(UIPlotState& uiPlotState) {
+    if (!uiPlotState.showMemoryProfiler) return;
+
+    if (ImGui::Begin("Memory Profiler", &uiPlotState.showMemoryProfiler)) {
+        // Signals Memory
+        if (ImGui::CollapsingHeader("Signals (C++)", ImGuiTreeNodeFlags_DefaultOpen)) {
+            size_t totalCurrentPoints = 0;
+            size_t totalCapacityPoints = 0;
+            
+            ImGui::Columns(4, "SignalColumns");
+            ImGui::Text("Name"); ImGui::NextColumn();
+            ImGui::Text("Size"); ImGui::NextColumn();
+            ImGui::Text("Cap"); ImGui::NextColumn();
+            ImGui::Text("Mem"); ImGui::NextColumn();
+            ImGui::Separator();
+
+            for (auto& [name, sig] : signalRegistry) {
+                size_t currentSize = sig.dataX.size();
+                size_t capacity = sig.dataX.capacity(); // Tracking capacity to see peak usage
+                totalCurrentPoints += currentSize;
+                totalCapacityPoints += capacity;
+
+                ImGui::Text("%s", name.c_str()); ImGui::NextColumn();
+                ImGui::Text("%zu", currentSize); ImGui::NextColumn();
+                ImGui::Text("%zu", capacity); ImGui::NextColumn();
+                ImGui::Text("%.2fMB", (capacity * 2 * sizeof(double)) / (1024.0 * 1024.0)); ImGui::NextColumn();
+            }
+            ImGui::Columns(1);
+            ImGui::Separator();
+            ImGui::Text("Total Signals: %zu", signalRegistry.size());
+            ImGui::Text("Total Capacity Points: %zu", totalCapacityPoints);
+            ImGui::Text("Total Memory (Est): %.2f MB", (totalCapacityPoints * 2 * sizeof(double)) / (1024.0 * 1024.0));
+        }
+
+        // Lua Memory
+        if (ImGui::CollapsingHeader("Lua VM", ImGuiTreeNodeFlags_DefaultOpen)) {
+            // sol::state::memory_used returns bytes
+            double luaMemBytes = luaScriptManager.getLuaState().memory_used();
+            ImGui::Text("Lua Memory Usage: %.2f MB", luaMemBytes / (1024.0 * 1024.0));
+        }
+
+        // Window Caches
+        if (ImGui::CollapsingHeader("Window Caches", ImGuiTreeNodeFlags_DefaultOpen)) {
+             size_t totalCacheBytes = 0;
+             for (auto& sw : uiPlotState.activeSpectrograms) {
+                 totalCacheBytes += sw.cachedMagnitudeMatrix.capacity() * sizeof(double);
+                 totalCacheBytes += sw.transposedMagnitudeMatrix.capacity() * sizeof(double);
+                 totalCacheBytes += sw.cachedTimeBins.capacity() * sizeof(double);
+                 totalCacheBytes += sw.cachedFreqBins.capacity() * sizeof(double);
+                 totalCacheBytes += sw.analyzerData.capacity() * sizeof(double);
+                 totalCacheBytes += sw.analyzerTime.capacity() * sizeof(double);
+                 totalCacheBytes += sw.pffft_buffer_size * 3 * sizeof(float); // work, output, input
+             }
+             ImGui::Text("Spectrogram Caches: %.2f MB", totalCacheBytes / (1024.0 * 1024.0));
+             ImGui::Text("Active Spectrograms: %zu", uiPlotState.activeSpectrograms.size());
+             
+             ImGui::Separator();
+             ImGui::Text("Active FFTs: %zu", uiPlotState.activeFFTs.size());
+             ImGui::Text("Active Histograms: %zu", uiPlotState.activeHistograms.size());
+        }
+    }
+    ImGui::End();
 }
 
 // -------------------------------------------------------------------------
@@ -916,26 +984,31 @@ inline void RenderFFTPlots(UIPlotState& uiPlotState, float menuBarHeight) {
   }
 }
 
+// Helper to map custom Colormap enum to ImPlotColormap
+inline ImPlotColormap MapToImPlotColormap(Colormap cm) {
+    switch (cm) {
+        case Colormap::Viridis: return ImPlotColormap_Viridis;
+        case Colormap::Plasma:  return ImPlotColormap_Plasma;
+        case Colormap::Magma:   return ImPlotColormap_Hot; // Best fit
+        case Colormap::Inferno: return ImPlotColormap_Hot; // Best fit
+        default:                return ImPlotColormap_Deep;
+    }
+}
+
 // -------------------------------------------------------------------------
 // SPECTROGRAM RENDERING
 // -------------------------------------------------------------------------
 
 inline void RenderSpectrograms(UIPlotState& uiPlotState, float menuBarHeight) {
-  // Loop through all active spectrograms
   for (auto &spectrogram : uiPlotState.activeSpectrograms) {
-    if (!spectrogram.isOpen)
-      continue;
+    if (!spectrogram.isOpen) continue;
 
-    // Set window position and size (with screen clamping)
     SetupWindowPositionAndSize(spectrogram, ImVec2(350, menuBarHeight + 20), ImVec2(900, 600));
 
-    // Use a stable ID (based on spectrogram.id) while displaying dynamic title
     std::string windowID = spectrogram.title + "##Spectrogram" + std::to_string(spectrogram.id);
     ImGui::Begin(windowID.c_str(), &spectrogram.isOpen);
 
-    // Display content based on whether a signal is assigned
     if (spectrogram.signalName.empty()) {
-      // Show drag-and-drop message
       ImVec2 windowSize = ImGui::GetWindowSize();
       const char* text = "Drag and drop a signal here";
       ImVec2 textSize = ImGui::CalcTextSize(text);
@@ -943,7 +1016,6 @@ inline void RenderSpectrograms(UIPlotState& uiPlotState, float menuBarHeight) {
       ImGui::SetCursorPosY((windowSize.y - textSize.y) * 0.5f);
       ImGui::TextWrapped("%s", text);
 
-      // Accept drag-and-drop for the entire window
       if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
           std::string droppedName = (const char *)payload->Data;
@@ -953,11 +1025,10 @@ inline void RenderSpectrograms(UIPlotState& uiPlotState, float menuBarHeight) {
         ImGui::EndDragDropTarget();
       }
     } else {
-      // Display the spectrogram
       if (signalRegistry.count(spectrogram.signalName)) {
         Signal &sig = signalRegistry[spectrogram.signalName];
 
-        // Controls at the top
+        // Controls
         ImGui::Text("FFT Size:");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120);
@@ -1011,183 +1082,151 @@ inline void RenderSpectrograms(UIPlotState& uiPlotState, float menuBarHeight) {
         if (ImGui::Combo("##Colormap", &colormapIdx, colormapItems, IM_ARRAYSIZE(colormapItems))) {
           spectrogram.colormap = (Colormap)colormapIdx;
         }
-
         ImGui::SameLine();
         ImGui::Checkbox("Interpolation", &spectrogram.useInterpolation);
 
         if (!sig.dataY.empty()) {
-          // Collect data points based on mode
-          std::vector<double> dataToAnalyze;
-          std::vector<double> timeToAnalyze;
-
-          if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
-            // Offline mode: collect all data up to current time window end
-            double targetTime = offlineState.currentWindowStart + offlineState.windowWidth;
-            for (size_t i = 0; i < sig.dataX.size(); i++) {
-              if (sig.dataX[i] <= targetTime) {
-                timeToAnalyze.push_back(sig.dataX[i]);
-                dataToAnalyze.push_back(sig.dataY[i]);
-              } else {
-                break;
-              }
-            }
-          } else {
-            // Online mode: use all data in the circular buffer
-            if (sig.mode == PlaybackMode::ONLINE && sig.dataY.size() == sig.maxSize) {
-              // Buffer is full, use circular logic
-              for (size_t i = 0; i < sig.dataY.size(); i++) {
-                int idx = (sig.offset + i) % sig.dataY.size();
-                timeToAnalyze.push_back(sig.dataX[idx]);
-                dataToAnalyze.push_back(sig.dataY[idx]);
-              }
+            // Determine if we need to recompute the spectrogram
+            bool needsUpdate = false;
+            if (currentPlaybackMode == PlaybackMode::OFFLINE) {
+                if (offlineState.currentWindowStart != spectrogram.cachedWindowStart || 
+                    offlineState.windowWidth != spectrogram.cachedWindowWidth ||
+                    sig.dataX.size() != spectrogram.cachedDataSize) {
+                    needsUpdate = true;
+                }
             } else {
-              // Buffer not full yet, use all data
-              timeToAnalyze = sig.dataX;
-              dataToAnalyze = sig.dataY;
+                if (sig.dataX.size() != spectrogram.cachedDataSize || 
+                    sig.offset != spectrogram.cachedOffset) {
+                    needsUpdate = true;
+                }
             }
-          }
+            
+            // Recompute if parameters changed
+            if (spectrogram.fftSize != spectrogram.cachedFftSize ||
+                spectrogram.hopSize != spectrogram.cachedHopSize ||
+                spectrogram.logScale != spectrogram.cachedLogScale ||
+                spectrogram.useHanning != spectrogram.cachedUseHanning ||
+                spectrogram.maxFrequency != spectrogram.cachedMaxFrequency) {
+                needsUpdate = true;
+            }
 
-          if (dataToAnalyze.size() >= (size_t)spectrogram.fftSize) {
-            // Compute spectrogram
-            std::vector<double> timeBins;
-            std::vector<double> freqBins;
-            std::vector<double> magnitudeMatrix;
+            if (needsUpdate) {
+              // Collect data points for analysis into cached buffers to avoid reallocations
+              spectrogram.analyzerData.clear();
+              spectrogram.analyzerTime.clear();
 
-            ComputeSpectrogram(dataToAnalyze, timeToAnalyze, spectrogram.fftSize, spectrogram.hopSize,
-                              spectrogram.useHanning, spectrogram.logScale, spectrogram.timeWindow,
-                              spectrogram.maxFrequency, timeBins, freqBins, magnitudeMatrix);
-
-            if (!timeBins.empty() && !freqBins.empty() && !magnitudeMatrix.empty()) {
-              // Calculate sampling frequency for display
-              double fs = CalculateSamplingFrequency(timeToAnalyze, std::max(0, (int)timeToAnalyze.size() - spectrogram.fftSize),
-                                                     std::min(spectrogram.fftSize, (int)timeToAnalyze.size()));
-
-              ImGui::Text("Sampling Freq: %.2f Hz | Time Bins: %zu | Freq Bins: %zu | Freq Res: %.3f Hz",
-                         fs, timeBins.size(), freqBins.size(), fs / spectrogram.fftSize);
-
-              // Plot the spectrogram
-              if (ImPlot::BeginPlot("##SpectrogramPlot", ImVec2(-1, -1))) {
-                const char* yAxisLabel = "Frequency (Hz)";
-                ImPlot::SetupAxes("Time (s)", yAxisLabel, ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-
-                // Determine bounds
-                int numTimeBins = timeBins.size();
-                int numFreqBins = freqBins.size();
-                double timeMin = timeBins.front();
-                double timeMax = timeBins.back();
-                double freqMin = freqBins.front();
-                double freqMax = freqBins.back();
-
-                // Find min/max magnitude for normalization
-                double magMin = *std::min_element(magnitudeMatrix.begin(), magnitudeMatrix.end());
-                double magMax = *std::max_element(magnitudeMatrix.begin(), magnitudeMatrix.end());
-                double magRange = magMax - magMin;
-                if (magRange < 1e-10) magRange = 1.0; // avoid division by zero
-
-                // Use custom colormap rendering if not ImPlotDefault
-                if (spectrogram.colormap != Colormap::ImPlotDefault) {
-                  // Setup axis limits explicitly for custom rendering
-                  ImPlot::SetupAxisLimits(ImAxis_X1, timeMin, timeMax, ImGuiCond_Always);
-                  ImPlot::SetupAxisLimits(ImAxis_Y1, freqMin, freqMax, ImGuiCond_Always);
-
-                  // Custom rendering with matplotlib-style colormaps
-                  ImDrawList* draw_list = ImPlot::GetPlotDrawList();
-
-                  // Determine pixel resolution for interpolation
-                  int pixelsPerTimeBin = spectrogram.useInterpolation ? 4 : 1;
-                  int pixelsPerFreqBin = spectrogram.useInterpolation ? 4 : 1;
-
-                  // Render rectangles for each bin/pixel
-                  for (int t = 0; t < numTimeBins - 1; t++) {
-                    for (int tSub = 0; tSub < pixelsPerTimeBin; tSub++) {
-                      double tFrac = (double)tSub / pixelsPerTimeBin;
-                      double time0 = timeBins[t] + tFrac * (timeBins[t+1] - timeBins[t]);
-                      double time1 = timeBins[t] + (tFrac + 1.0/pixelsPerTimeBin) * (timeBins[t+1] - timeBins[t]);
-
-                      for (int f = 0; f < numFreqBins - 1; f++) {
-                        for (int fSub = 0; fSub < pixelsPerFreqBin; fSub++) {
-                          double fFrac = (double)fSub / pixelsPerFreqBin;
-                          double freq0 = freqBins[f] + fFrac * (freqBins[f+1] - freqBins[f]);
-                          double freq1 = freqBins[f] + (fFrac + 1.0/pixelsPerFreqBin) * (freqBins[f+1] - freqBins[f]);
-
-                          // Bilinear interpolation
-                          double mag;
-                          if (spectrogram.useInterpolation) {
-                            double t00 = magnitudeMatrix[t * numFreqBins + f];
-                            double t10 = magnitudeMatrix[(t+1) * numFreqBins + f];
-                            double t01 = magnitudeMatrix[t * numFreqBins + (f+1)];
-                            double t11 = magnitudeMatrix[(t+1) * numFreqBins + (f+1)];
-
-                            double interpT = tFrac;
-                            double interpF = fFrac;
-                            mag = (1-interpT)*(1-interpF)*t00 + interpT*(1-interpF)*t10 +
-                                  (1-interpT)*interpF*t01 + interpT*interpF*t11;
-                          } else {
-                            mag = magnitudeMatrix[t * numFreqBins + f];
-                          }
-
-                          // Normalize to [0,1]
-                          double normalized = (mag - magMin) / magRange;
-                          ImU32 color = GetColormapColor(spectrogram.colormap, normalized);
-
-                          // Convert to plot coordinates
-                          ImVec2 p0 = ImPlot::PlotToPixels(time0, freq0);
-                          ImVec2 p1 = ImPlot::PlotToPixels(time1, freq1);
-
-                          draw_list->AddRectFilled(p0, p1, color);
-                        }
-                      }
-                    }
+              if (currentPlaybackMode == PlaybackMode::OFFLINE && offlineState.fileLoaded) {
+                double targetTime = offlineState.currentWindowStart + offlineState.windowWidth;
+                for (size_t i = 0; i < sig.dataX.size(); i++) {
+                  if (sig.dataX[i] <= targetTime) {
+                    spectrogram.analyzerTime.push_back(sig.dataX[i]);
+                    spectrogram.analyzerData.push_back(sig.dataY[i]);
+                  } else break;
+                }
+              } else {
+                if (sig.mode == PlaybackMode::ONLINE && sig.dataY.size() == sig.maxSize) {
+                  spectrogram.analyzerTime.reserve(sig.maxSize);
+                  spectrogram.analyzerData.reserve(sig.maxSize);
+                  for (size_t i = 0; i < sig.dataY.size(); i++) {
+                    int idx = (sig.offset + i) % sig.dataY.size();
+                    spectrogram.analyzerTime.push_back(sig.dataX[idx]);
+                    spectrogram.analyzerData.push_back(sig.dataY[idx]);
                   }
                 } else {
-                  // Use ImPlot default heatmap
-                  std::vector<double> transposedMatrix(numTimeBins * numFreqBins);
+                  spectrogram.analyzerTime = sig.dataX;
+                  spectrogram.analyzerData = sig.dataY;
+                }
+              }
+
+              if (spectrogram.analyzerData.size() >= (size_t)spectrogram.fftSize) {
+                ComputeSpectrogram(spectrogram.analyzerData, spectrogram.analyzerTime, spectrogram);
+                
+                // Calculate sampling frequency and cache it
+                spectrogram.cachedFs = CalculateSamplingFrequency(spectrogram.analyzerTime, std::max(0, (int)spectrogram.analyzerTime.size() - spectrogram.fftSize),
+                                                                 std::min(spectrogram.fftSize, (int)spectrogram.analyzerTime.size()));
+
+                // Update cache metadata
+                spectrogram.cachedDataSize = sig.dataX.size();
+                spectrogram.cachedOffset = sig.offset;
+                spectrogram.cachedWindowStart = offlineState.currentWindowStart;
+                spectrogram.cachedWindowWidth = offlineState.windowWidth;
+                spectrogram.cachedFftSize = spectrogram.fftSize;
+                spectrogram.cachedHopSize = spectrogram.hopSize;
+                spectrogram.cachedLogScale = spectrogram.logScale;
+                spectrogram.cachedUseHanning = spectrogram.useHanning;
+                spectrogram.cachedMaxFrequency = spectrogram.maxFrequency;
+
+                // Handle transposition
+                int numTimeBins = spectrogram.cachedTimeBins.size();
+                int numFreqBins = spectrogram.cachedFreqBins.size();
+                if (numTimeBins > 0 && numFreqBins > 0) {
+                  spectrogram.transposedMagnitudeMatrix.resize(numTimeBins * numFreqBins);
                   for (int t = 0; t < numTimeBins; t++) {
                     for (int f = 0; f < numFreqBins; f++) {
                       int srcIdx = t * numFreqBins + f;
                       int dstIdx = (numFreqBins - 1 - f) * numTimeBins + t;
-                      transposedMatrix[dstIdx] = magnitudeMatrix[srcIdx];
+                      spectrogram.transposedMagnitudeMatrix[dstIdx] = spectrogram.cachedMagnitudeMatrix[srcIdx];
                     }
                   }
-                  ImPlot::PlotHeatmap("##HeatmapData", transposedMatrix.data(),
-                                     numFreqBins, numTimeBins,
-                                     0.0, 0.0,
-                                     nullptr,
-                                     ImPlotPoint(timeMin, freqMin),
-                                     ImPlotPoint(timeMax, freqMax));
                 }
+              }
+            }
 
+            if (!spectrogram.cachedTimeBins.empty() && !spectrogram.cachedFreqBins.empty() && !spectrogram.cachedMagnitudeMatrix.empty()) {
+              ImGui::Text("Sampling Freq: %.2f Hz | Time Bins: %zu | Freq Bins: %zu | Freq Res: %.3f Hz",
+                         spectrogram.cachedFs, spectrogram.cachedTimeBins.size(), spectrogram.cachedFreqBins.size(), spectrogram.cachedFs / spectrogram.fftSize);
+
+              // Plot the spectrogram
+              if (ImPlot::BeginPlot("##SpectrogramPlot", ImVec2(-1, -1))) {
+                ImPlot::SetupAxes("Time (s)", "Frequency (Hz)", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
+
+                // Determine bounds
+                int numTimeBins = spectrogram.cachedTimeBins.size();
+                int numFreqBins = spectrogram.cachedFreqBins.size();
+                double timeMin = spectrogram.cachedTimeBins.front();
+                double timeMax = spectrogram.cachedTimeBins.back();
+                double freqMin = spectrogram.cachedFreqBins.front();
+                double freqMax = spectrogram.cachedFreqBins.back();
+
+                // Find min/max magnitude for normalization if using PlotHeatmap scale
+                double magMin = *std::min_element(spectrogram.cachedMagnitudeMatrix.begin(), spectrogram.cachedMagnitudeMatrix.end());
+                double magMax = *std::max_element(spectrogram.cachedMagnitudeMatrix.begin(), spectrogram.cachedMagnitudeMatrix.end());
+
+                if (spectrogram.colormap != Colormap::ImPlotDefault) ImPlot::PushColormap(MapToImPlotColormap(spectrogram.colormap));
+                ImPlot::PlotHeatmap("##HeatmapData", spectrogram.transposedMagnitudeMatrix.data(),
+                                   numFreqBins, numTimeBins,
+                                   magMin, magMax,
+                                   nullptr,
+                                   ImPlotPoint(timeMin, freqMin),
+                                   ImPlotPoint(timeMax, freqMax));
+                if (spectrogram.colormap != Colormap::ImPlotDefault) ImPlot::PopColormap();
                 ImPlot::EndPlot();
               }
             } else {
               ImGui::TextDisabled("Spectrogram computation failed");
             }
           } else {
-            ImGui::TextDisabled("Not enough data for spectrogram (need %d samples, have %zu)", spectrogram.fftSize, dataToAnalyze.size());
+            ImGui::TextDisabled("No data");
           }
         } else {
-          ImGui::TextDisabled("No data");
+          ImGui::TextDisabled("Signal not found");
         }
-      } else {
-        ImGui::TextDisabled("Signal not found");
+
+        // Accept drag-and-drop to change signal
+        if (ImGui::BeginDragDropTarget()) {
+          if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
+            std::string droppedName = (const char *)payload->Data;
+            spectrogram.signalName = droppedName;
+            spectrogram.title = droppedName + " Spectrogram";
+          }
+          ImGui::EndDragDropTarget();
+        }
       }
 
-      // Accept drag-and-drop to change signal
-      if (ImGui::BeginDragDropTarget()) {
-        if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("SIGNAL_NAME")) {
-          std::string droppedName = (const char *)payload->Data;
-          spectrogram.signalName = droppedName;
-          spectrogram.title = droppedName + " Spectrogram";
-        }
-        ImGui::EndDragDropTarget();
-      }
+      // Capture current window position and size
+      CaptureWindowPositionAndSize(spectrogram);
+      ImGui::End();
     }
-
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(spectrogram);
-
-    ImGui::End();
-  }
 }
 
 // -------------------------------------------------------------------------

@@ -215,6 +215,11 @@ void MainLoopStep(void *arg) {
   RenderSpectrograms(uiPlotState, menuBarHeight);
 
   // ---------------------------------------------------------
+  // UI: MEMORY PROFILER
+  // ---------------------------------------------------------
+  RenderMemoryProfiler(uiPlotState);
+
+  // ---------------------------------------------------------
   // UI: CONTROL ELEMENTS (Tier 4)
   // ---------------------------------------------------------
   RenderButtonControls(uiPlotState, menuBarHeight);
@@ -248,6 +253,36 @@ void MainLoopStep(void *arg) {
       std::remove_if(uiPlotState.activeXYPlots.begin(), uiPlotState.activeXYPlots.end(),
                      [](const XYPlotWindow &xy) { return !xy.isOpen; }),
       uiPlotState.activeXYPlots.end());
+
+  uiPlotState.activeHistograms.erase(
+      std::remove_if(uiPlotState.activeHistograms.begin(), uiPlotState.activeHistograms.end(),
+                     [](const HistogramWindow &h) { return !h.isOpen; }),
+      uiPlotState.activeHistograms.end());
+
+  uiPlotState.activeFFTs.erase(
+      std::remove_if(uiPlotState.activeFFTs.begin(), uiPlotState.activeFFTs.end(),
+                     [](const FFTWindow &f) { return !f.isOpen; }),
+      uiPlotState.activeFFTs.end());
+
+  uiPlotState.activeSpectrograms.erase(
+      std::remove_if(uiPlotState.activeSpectrograms.begin(), uiPlotState.activeSpectrograms.end(),
+                     [](const SpectrogramWindow &s) { return !s.isOpen; }),
+      uiPlotState.activeSpectrograms.end());
+
+  uiPlotState.activeButtons.erase(
+      std::remove_if(uiPlotState.activeButtons.begin(), uiPlotState.activeButtons.end(),
+                     [](const ButtonControl &b) { return !b.isOpen; }),
+      uiPlotState.activeButtons.end());
+
+  uiPlotState.activeToggles.erase(
+      std::remove_if(uiPlotState.activeToggles.begin(), uiPlotState.activeToggles.end(),
+                     [](const ToggleControl &t) { return !t.isOpen; }),
+      uiPlotState.activeToggles.end());
+
+  uiPlotState.activeTextInputs.erase(
+      std::remove_if(uiPlotState.activeTextInputs.begin(), uiPlotState.activeTextInputs.end(),
+                     [](const TextInputControl &ti) { return !ti.isOpen; }),
+      uiPlotState.activeTextInputs.end());
 
   // Render
   ImGui::Render();
