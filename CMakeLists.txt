@@ -3,6 +3,14 @@ project(TelemetryGui)
 
 set(CMAKE_CXX_STANDARD 17)
 
+# Profiling option (use with: cmake -DENABLE_PROFILING=ON ..)
+option(ENABLE_PROFILING "Enable gprof profiling" OFF)
+if(ENABLE_PROFILING)
+    message(STATUS "Profiling enabled - use gprof to analyze")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pg")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pg")
+endif()
+
 # Enable Link Time Optimization (LTO/IPO) for smaller binaries
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
@@ -159,7 +167,15 @@ target_include_directories(telemetry_gui PRIVATE
     src
 )
 
-# Copy resources to build directory
+# Custom target to always copy scripts directory on every build
+add_custom_target(copy_scripts ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/scripts
+        ${CMAKE_CURRENT_BINARY_DIR}/scripts
+    COMMENT "Copying scripts directory to build folder..."
+)
+
+# Copy other resources to build directory
 add_custom_command(TARGET telemetry_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf
@@ -167,10 +183,10 @@ add_custom_command(TARGET telemetry_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/signals.yaml
         ${CMAKE_CURRENT_BINARY_DIR}/signals.yaml
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/scripts
-        ${CMAKE_CURRENT_BINARY_DIR}/scripts
 )
+
+# Make telemetry_gui depend on the copy_scripts target
+add_dependencies(telemetry_gui copy_scripts)
 
 # Link libraries - Windows only
 target_link_libraries(telemetry_gui PRIVATE

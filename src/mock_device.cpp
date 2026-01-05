@@ -158,7 +158,7 @@ void gps_thread_func(int sockfd, sockaddr_in dest_addr) {
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
@@ -209,7 +209,7 @@ void battery_thread_func(int sockfd, sockaddr_in dest_addr) {
 
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
@@ -253,7 +253,7 @@ void lidar_thread_func(int sockfd, sockaddr_in dest_addr) {
 
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
@@ -307,7 +307,7 @@ void radar_thread_func(int sockfd, sockaddr_in dest_addr) {
 
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
@@ -364,7 +364,7 @@ void state_thread_func(int sockfd, sockaddr_in dest_addr) {
 
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
@@ -418,7 +418,7 @@ void debug_thread_func(int sockfd, sockaddr_in dest_addr) {
 
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
@@ -480,7 +480,7 @@ void motor_thread_func(int sockfd, sockaddr_in dest_addr) {
 
         sendto(sockfd, (const char*)&packet, sizeof(packet), 0,
                (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }
 
@@ -527,13 +527,13 @@ int main() {
     // Calculate data rate
     double bytesPerSecond =
         sizeof(IMUData) * 1000.0 +      // IMU at 1000Hz
-        sizeof(GPSData) * 10.0 +        // GPS at 10Hz
-        sizeof(BatteryData) * 1.0 +     // Battery at 1Hz
-        sizeof(LIDARData) * 20.0 +      // LIDAR at 20Hz
-        sizeof(RADARData) * 10.0 +      // RADAR at 10Hz
-        sizeof(StateData) * 2.0 +       // State at 2Hz
-        sizeof(DebugData) * 5.0 +       // Debug at 5Hz
-        sizeof(MotorData) * 10.0;       // Motor at 10Hz
+        sizeof(GPSData) * 50.0 +        // GPS at 10Hz
+        sizeof(BatteryData) * 50.0 +     // Battery at 1Hz
+        sizeof(LIDARData) * 50.0 +      // LIDAR at 20Hz
+        sizeof(RADARData) * 50.0 +      // RADAR at 10Hz
+        sizeof(StateData) * 50.0 +       // State at 2Hz
+        sizeof(DebugData) * 50.0 +       // Debug at 5Hz
+        sizeof(MotorData) * 50.0;       // Motor at 10Hz
 
     double mbitsPerSecond = (bytesPerSecond * 8.0) / (1000.0 * 1000.0);
     double mbytesPerSecond = bytesPerSecond / (1024.0 * 1024.0);
