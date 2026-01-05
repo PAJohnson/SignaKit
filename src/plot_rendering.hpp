@@ -971,8 +971,8 @@ inline void RenderSpectrograms(UIPlotState& uiPlotState, float menuBarHeight) {
 
         if (ImGui::Combo("##SpectFFTSize", &fftSizeIdx, fftSizeItems, IM_ARRAYSIZE(fftSizeItems))) {
           spectrogram.fftSize = 1 << (fftSizeIdx + 7); // 2^(idx+7): 128, 256, 512, 1024, 2048
-          // Adjust hop size to be fftSize/4 for 75% overlap
-          spectrogram.hopSize = spectrogram.fftSize / 4;
+          // Adjust hop size to be fftSize/2 for 50% overlap (good balance of quality and performance)
+          spectrogram.hopSize = spectrogram.fftSize / 2;
         }
 
         ImGui::SameLine();

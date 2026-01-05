@@ -2,42 +2,56 @@
 
 #include "imgui.h"
 #include "plot_types.hpp"
+#include "pffft.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
+#include <memory>
+#include <map>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 // -------------------------------------------------------------------------
-// FFT AND SIGNAL PROCESSING
+// FFT AND SIGNAL PROCESSING (using pffft for SIMD optimization)
 // -------------------------------------------------------------------------
 
-// Complex number structure for FFT
-struct Complex {
-  double real;
-  double imag;
-
-  Complex(double r = 0.0, double i = 0.0) : real(r), imag(i) {}
-
-  Complex operator+(const Complex& other) const {
-    return Complex(real + other.real, imag + other.imag);
-  }
-
-  Complex operator-(const Complex& other) const {
-    return Complex(real - other.real, imag - other.imag);
-  }
-
-  Complex operator*(const Complex& other) const {
-    return Complex(real * other.real - imag * other.imag,
-                   real * other.imag + imag * other.real);
-  }
-
-  double magnitude() const {
-    return sqrt(real * real + imag * imag);
+// RAII wrapper for pffft setup to ensure proper cleanup
+struct PFFTSetupDeleter {
+  void operator()(PFFFT_Setup* setup) const {
+    if (setup) {
+      pffft_destroy_setup(setup);
+    }
   }
 };
+
+using PFFTSetupPtr = std::unique_ptr<PFFFT_Setup, PFFTSetupDeleter>;
+
+// Cache for pffft setups (expensive to create, should be reused)
+// Key: FFT size, Value: setup pointer
+inline std::map<int, PFFTSetupPtr>& GetPFFTSetupCache() {
+  static std::map<int, PFFTSetupPtr> cache;
+  return cache;
+}
+
+// Get or create cached pffft setup for given size
+inline PFFFT_Setup* GetCachedPFFTSetup(int N) {
+  auto& cache = GetPFFTSetupCache();
+  auto it = cache.find(N);
+
+  if (it != cache.end()) {
+    return it->second.get();
+  }
+
+  // Create new setup and cache it
+  PFFFT_Setup* setup = pffft_new_setup(N, PFFFT_REAL);
+  if (setup) {
+    cache[N] = PFFTSetupPtr(setup);
+  }
+  return setup;
+}
 
 // Calculate average sampling frequency from time points
 inline double CalculateSamplingFrequency(const std::vector<double>& timePoints, int startIdx, int numSamples) {
@@ -65,68 +79,74 @@ inline double CalculateSamplingFrequency(const std::vector<double>& timePoints, 
   return 1.0; // Fallback
 }
 
-// Apply Hanning window to reduce spectral leakage
-inline void ApplyHanningWindow(std::vector<double>& data) {
+// Apply Hanning window to reduce spectral leakage (operates on float for pffft)
+inline void ApplyHanningWindow(std::vector<float>& data) {
   int N = data.size();
   for (int i = 0; i < N; i++) {
-    double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (N - 1)));
+    float window = 0.5f * (1.0f - cosf(2.0f * M_PI * i / (N - 1)));
     data[i] *= window;
   }
 }
 
-// Cooley-Tukey FFT algorithm (radix-2 decimation-in-time)
-inline void FFT(std::vector<Complex>& data) {
-  int N = data.size();
-  if (N <= 1) return;
+// Optimized FFT using pffft library (SIMD-accelerated)
+// Input: real-valued signal in 'input' (size N)
+// Returns magnitude spectrum (first N/2 bins only, since input is real)
+inline void ComputeRealFFT(const std::vector<float>& input, std::vector<float>& magnitudes) {
+  int N = input.size();
 
-  // Check if N is a power of 2
-  if ((N & (N - 1)) != 0) {
-    fprintf(stderr, "FFT size must be a power of 2\n");
+  // pffft requires N >= 32 and power of 2
+  if (N < 32 || (N & (N - 1)) != 0) {
+    fprintf(stderr, "pffft FFT size must be >= 32 and power of 2, got %d\n", N);
+    magnitudes.clear();
     return;
   }
 
-  // Bit-reversal permutation
-  int bits = 0;
-  int temp = N;
-  while (temp > 1) {
-    temp >>= 1;
-    bits++;
+  // Get cached pffft setup (expensive to create, so we cache and reuse)
+  PFFFT_Setup* setup = GetCachedPFFTSetup(N);
+  if (!setup) {
+    fprintf(stderr, "Failed to create pffft setup for size %d\n", N);
+    magnitudes.clear();
+    return;
   }
 
-  for (int i = 0; i < N; i++) {
-    int j = 0;
-    int temp_i = i;
-    for (int b = 0; b < bits; b++) {
-      j = (j << 1) | (temp_i & 1);
-      temp_i >>= 1;
-    }
-    if (j > i) {
-      std::swap(data[i], data[j]);
-    }
+  // Use pffft_aligned_malloc for proper SIMD alignment
+  float* work = (float*)pffft_aligned_malloc(N * sizeof(float));
+  float* output = (float*)pffft_aligned_malloc(N * sizeof(float));
+  float* inputCopy = (float*)pffft_aligned_malloc(N * sizeof(float));
+
+  // Copy input data
+  memcpy(inputCopy, input.data(), N * sizeof(float));
+
+  // Perform forward FFT
+  // pffft_transform_ordered for PFFFT_REAL produces:
+  // [DC, r1, r2, ..., r(N/2-1), Nyquist, i(N/2-1), ..., i2, i1]
+  // where DC and Nyquist are purely real
+  pffft_transform_ordered(setup, inputCopy, output, work, PFFFT_FORWARD);
+
+  // Extract magnitude spectrum
+  int numBins = N / 2;
+  magnitudes.resize(numBins);
+
+  // DC component (bin 0)
+  magnitudes[0] = fabsf(output[0]);
+
+  // Regular bins 1 to N/2-1
+  // After testing, pffft real format appears to be:
+  // [r0, r(N/2), r1, i1, r2, i2, ..., r(N/2-1), i(N/2-1)]
+  // This is "interleaved" format after the first two elements
+  for (int k = 1; k < numBins; k++) {
+    float real = output[2 * k];
+    float imag = output[2 * k + 1];
+    magnitudes[k] = sqrtf(real * real + imag * imag);
   }
 
-  // FFT computation
-  for (int s = 1; s <= bits; s++) {
-    int m = 1 << s; // 2^s
-    int m2 = m >> 1; // m/2
-
-    Complex w(1.0, 0.0);
-    double angle = -M_PI / m2;
-    Complex wm(cos(angle), sin(angle));
-
-    for (int j = 0; j < m2; j++) {
-      for (int k = j; k < N; k += m) {
-        Complex t = w * data[k + m2];
-        Complex u = data[k];
-        data[k] = u + t;
-        data[k + m2] = u - t;
-      }
-      w = w * wm;
-    }
-  }
+  // Free aligned memory
+  pffft_aligned_free(work);
+  pffft_aligned_free(output);
+  pffft_aligned_free(inputCopy);
 }
 
-// Compute FFT magnitude spectrum from signal data
+// Compute FFT magnitude spectrum from signal data using pffft
 // Returns frequency bins and magnitude values
 inline void ComputeFFTSpectrum(const std::vector<double>& signalData,
                        const std::vector<double>& timePoints,
@@ -143,14 +163,21 @@ inline void ComputeFFTSpectrum(const std::vector<double>& signalData,
     return;
   }
 
+  // pffft requires N >= 32 and power of 2
+  if (fftSize < 32 || (fftSize & (fftSize - 1)) != 0) {
+    freqBins.clear();
+    magnitude.clear();
+    return;
+  }
+
   // Calculate sampling frequency
   double fs = CalculateSamplingFrequency(timePoints, 0, std::min(fftSize, (int)timePoints.size()));
 
-  // Prepare data for FFT (use most recent samples)
+  // Prepare data for FFT (use most recent samples) - convert to float for pffft
   int startIdx = signalData.size() - fftSize;
-  std::vector<double> windowedData(fftSize);
+  std::vector<float> windowedData(fftSize);
   for (int i = 0; i < fftSize; i++) {
-    windowedData[i] = signalData[startIdx + i];
+    windowedData[i] = static_cast<float>(signalData[startIdx + i]);
   }
 
   // Apply window function if requested
@@ -158,13 +185,9 @@ inline void ComputeFFTSpectrum(const std::vector<double>& signalData,
     ApplyHanningWindow(windowedData);
   }
 
-  // Convert to complex and perform FFT
-  std::vector<Complex> fftData(fftSize);
-  for (int i = 0; i < fftSize; i++) {
-    fftData[i] = Complex(windowedData[i], 0.0);
-  }
-
-  FFT(fftData);
+  // Perform FFT using pffft
+  std::vector<float> magnitudesFloat;
+  ComputeRealFFT(windowedData, magnitudesFloat);
 
   // Extract magnitude spectrum (only first half, since FFT is symmetric for real signals)
   int numFreqBins = fftSize / 2;
@@ -175,7 +198,7 @@ inline void ComputeFFTSpectrum(const std::vector<double>& signalData,
 
   for (int i = 0; i < numFreqBins; i++) {
     freqBins[i] = i * freqResolution;
-    double mag = fftData[i].magnitude();
+    double mag = static_cast<double>(magnitudesFloat[i]);
 
     // Normalize by FFT size
     mag = mag / fftSize;
@@ -408,7 +431,7 @@ inline void ComputeSpectrogram(const std::vector<double>& signalData,
     freqBins[i] = i * freqResolution;
   }
 
-  // Process each FFT window
+  // Process each FFT window using pffft
   for (int windowIdx = 0; windowIdx < numWindows; windowIdx++) {
     int startIdx = dataStartIdx + windowIdx * hopSize;
 
@@ -420,13 +443,13 @@ inline void ComputeSpectrogram(const std::vector<double>& signalData,
       timeBins[windowIdx] = timePoints.back();
     }
 
-    // Extract window data
-    std::vector<double> windowedData(fftSize);
+    // Extract window data - convert to float for pffft
+    std::vector<float> windowedData(fftSize);
     for (int i = 0; i < fftSize; i++) {
       if (startIdx + i < (int)signalData.size()) {
-        windowedData[i] = signalData[startIdx + i];
+        windowedData[i] = static_cast<float>(signalData[startIdx + i]);
       } else {
-        windowedData[i] = 0.0; // Zero-pad if needed
+        windowedData[i] = 0.0f; // Zero-pad if needed
       }
     }
 
@@ -435,17 +458,13 @@ inline void ComputeSpectrogram(const std::vector<double>& signalData,
       ApplyHanningWindow(windowedData);
     }
 
-    // Convert to complex and perform FFT
-    std::vector<Complex> fftData(fftSize);
-    for (int i = 0; i < fftSize; i++) {
-      fftData[i] = Complex(windowedData[i], 0.0);
-    }
-
-    FFT(fftData);
+    // Perform FFT using pffft
+    std::vector<float> magnitudesFloat;
+    ComputeRealFFT(windowedData, magnitudesFloat);
 
     // Extract magnitude spectrum and store in matrix
     for (int i = 0; i < actualNumFreqBins; i++) {
-      double mag = fftData[i].magnitude();
+      double mag = static_cast<double>(magnitudesFloat[i]);
 
       // Normalize by FFT size
       mag = mag / fftSize;

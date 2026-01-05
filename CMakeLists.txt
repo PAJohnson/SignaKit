@@ -124,6 +124,29 @@ FetchContent_MakeAvailable(sockpp)
 
 message(STATUS "sockpp configured for static linking")
 
+# Fetch pffft for optimized FFT computation (SIMD-optimized, single-precision)
+# Using the original pffft repository which is simpler and has no dependencies
+message(STATUS "Fetching pffft for optimized FFT...")
+FetchContent_Declare(
+    pffft
+    GIT_REPOSITORY https://bitbucket.org/jpommier/pffft.git
+    GIT_TAG master
+)
+FetchContent_GetProperties(pffft)
+if(NOT pffft_POPULATED)
+    FetchContent_Populate(pffft)
+    # Build pffft as a static library manually (it's just pffft.c and pffft.h)
+    add_library(pffft_lib STATIC ${pffft_SOURCE_DIR}/pffft.c)
+    target_include_directories(pffft_lib PUBLIC ${pffft_SOURCE_DIR})
+    # Enable SIMD optimizations
+    if(MSVC)
+        target_compile_options(pffft_lib PRIVATE /arch:SSE2)
+    else()
+        target_compile_options(pffft_lib PRIVATE -msse2)
+    endif()
+endif()
+message(STATUS "pffft configured for static linking")
+
 # ImGui Sources
 set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui.cpp
@@ -164,6 +187,7 @@ target_include_directories(telemetry_gui PRIVATE
     ${IMGUIFILEDIALOG_DIR}
     ${SDL2_INCLUDE_DIRS}
     ${LUA_INCLUDE_DIR}
+    ${pffft_SOURCE_DIR}
     src
 )
 
@@ -203,6 +227,7 @@ target_link_libraries(telemetry_gui PRIVATE
     sol2::sol2
     ${LUA_LIBRARIES}
     sockpp-static
+    pffft_lib
 )
 
 # Static linking for portability

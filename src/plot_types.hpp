@@ -108,7 +108,7 @@ struct SpectrogramWindow {
   std::string signalName; // Single signal to display (empty if none assigned)
   bool isOpen = true;
   int fftSize = 512; // Number of samples per FFT window (power of 2)
-  int hopSize = 128; // Number of samples to advance between FFT windows
+  int hopSize = 256; // Number of samples to advance between FFT windows (default 50% overlap)
   bool useHanning = true; // Apply Hanning window to reduce spectral leakage
   bool logScale = true; // Display magnitude in dB scale
   double timeWindow = 5.0; // Time duration to display (seconds)
@@ -121,6 +121,14 @@ struct SpectrogramWindow {
   float posY = -1.0f;
   float sizeX = -1.0f;
   float sizeY = -1.0f;
+
+  // Cache for spectrogram computation (performance optimization)
+  std::vector<double> cachedTimeBins;
+  std::vector<double> cachedFreqBins;
+  std::vector<double> cachedMagnitudeMatrix;
+  size_t cachedDataSize = 0; // Size of data when cache was computed
+  double lastComputeTime = 0.0; // Time when last computed
+  double updateThrottleSeconds = 0.1; // Minimum seconds between updates (10 FPS max)
 };
 
 // -------------------------------------------------------------------------
