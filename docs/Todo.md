@@ -7,7 +7,7 @@
 - ✅ Auto-load scripts from `scripts/` directory at startup
 - ✅ GUI controls for loading/reloading scripts with hot-reload support
 - ✅ Exposed signal access API: `get_signal()`, `get_signal_history()`, `signal_exists()`
-- ✅ Transform registration API: `register_transform(name, function)`
+- ✅ Transform registration API: `on_packet(packet_name, output_name, function)`
 - ✅ Created example scripts: vector magnitude, unit conversion, filtering, power calculation
 - ✅ Full documentation in `docs/LuaScripting.md` and `scripts/README.md`
 - ✅ Error handling and display in Scripts menu

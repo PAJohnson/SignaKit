@@ -98,24 +98,25 @@ if signal_exists("GPS.latitude") then
 end
 ```
 
-### Transform Registration
+### Packet Callbacks
 
-#### `register_transform(output_name, function)`
-Register a function that computes a derived signal.
+#### `on_packet(packet_name, output_name, function)`
+Register a function that runs when a specific packet type is received.
 
 **Parameters:**
+- `packet_name` (string): Name of the packet to trigger on (e.g., "IMU", "GPS")
 - `output_name` (string): Name of the new signal to create
 - `function` (function): Lua function that returns a number or `nil`
 
 **Notes:**
-- Transform functions are called after each packet is parsed
+- Transform functions are called immediately after the specified packet is parsed
 - Returned values are automatically timestamped and added to the signal registry
 - Returning `nil` skips adding a value for this cycle
 - If the transform function has an error, it's logged and execution continues
 
 **Example:**
 ```lua
-register_transform("IMU.accelMagnitude", function()
+on_packet("IMU", "IMU.accelMagnitude", function()
     local ax = get_signal("IMU.accelX")
     local ay = get_signal("IMU.accelY")
     local az = get_signal("IMU.accelZ")
@@ -173,7 +174,7 @@ Compute 3D magnitude from components:
 -- accel_magnitude.lua
 log("Loaded script: accel_magnitude.lua")
 
-register_transform("IMU.accelMagnitude", function()
+on_packet("IMU", "IMU.accelMagnitude", function()
     local ax = get_signal("IMU.accelX")
     local ay = get_signal("IMU.accelY")
     local az = get_signal("IMU.accelZ")
@@ -192,7 +193,7 @@ Convert GPS speed from m/s to km/h:
 
 ```lua
 -- gps_speed_kmh.lua
-register_transform("GPS.speedKmh", function()
+on_packet("GPS", "GPS.speedKmh", function()
     local speed_ms = get_signal("GPS.speed")
 
     if speed_ms then
@@ -209,7 +210,7 @@ Compute battery power from voltage and current:
 
 ```lua
 -- battery_power.lua
-register_transform("BAT.power", function()
+on_packet("BAT", "BAT.power", function()
     local voltage = get_signal("BAT.voltage")
     local current = get_signal("BAT.current")
 
@@ -230,7 +231,7 @@ Exponential moving average (EMA) filter:
 local filtered_value = nil
 local alpha = 0.1  -- Smoothing factor
 
-register_transform("IMU.accelX_filtered", function()
+on_packet("IMU", "IMU.accelX_filtered", function()
     local current = get_signal("IMU.accelX")
 
     if current then
@@ -257,7 +258,7 @@ Detect when a signal exceeds a threshold:
 -- high_g_detector.lua
 local threshold = 15.0  -- G-force threshold
 
-register_transform("IMU.highGDetected", function()
+on_packet("IMU", "IMU.highGDetected", function()
     local accelX = get_signal("IMU.accelX")
     local accelY = get_signal("IMU.accelY")
     local accelZ = get_signal("IMU.accelZ")
@@ -285,7 +286,7 @@ Compute a moving average using history:
 -- moving_average.lua
 local window_size = 10
 
-register_transform("GPS.speed_smoothed", function()
+on_packet("GPS", "GPS.speed_smoothed", function()
     local history = get_signal_history("GPS.speed", window_size)
 
     if history and #history > 0 then
@@ -321,7 +322,7 @@ end)
 local GRAVITY = 9.81
 local THRESHOLD = 2.5 * GRAVITY
 
-register_transform("IMU.exceedsThreshold", function()
+on_packet("IMU", "IMU.exceedsThreshold", function()
     local accel = get_signal("IMU.accelZ")
 
     -- Early return if signal unavailable
@@ -388,47 +389,6 @@ Available signals depend on your Lua parsers in `scripts/parsers/`. Check the co
 - Avoid creating large tables or strings
 - Use `get_signal()` instead of `get_signal_history()` when possible
 - Profile using `log()` with timestamps
-
-## Future Extensions
-
-### ✅ Tier 1: Signal Transforms (COMPLETE)
-Current implementation - transform existing signals into derived signals.
-
-### ✅ Tier 2: Lua Packet Parsing (COMPLETE - 2026-01-03)
-**Custom packet parsers written entirely in Lua!**
-
-Parse any packet format (binary, JSON, CSV, Protobuf, encrypted, etc.) without recompiling the GUI.
-
-**New Features:**
-- Byte-manipulation API: `readUInt8/16/32/64`, `readInt8/16/32/64`, `readFloat/Double`
-- String readers: `readString`, `readCString`
-- Buffer utilities: `getBufferLength`, `getBufferByte`, `bytesToHex`
-- Signal manipulation: `update_signal`, `create_signal`
-- Parser registration: `register_parser(name, function)`
-- Endianness handling (little/big-endian)
-- Parser-defined signal creation
-
-**Documentation:** See `docs/LuaPacketParsing.md` for complete API reference and examples.
-
-**Example parsers:**
-- `scripts/parsers/legacy_binary.lua` - Binary packet parser
-- `scripts/parsers/json_example.lua` - JSON parsing example
-- `scripts/parsers/csv_example.lua` - CSV parsing example
-
-### 🔄 Tier 3: Frame Callbacks & Monitoring (TODO)
-- Execute code every GUI frame for monitoring and alerting
-- Event-based alerting when signals meet conditions
-- Statistics accumulation and custom logging
-
-### 🔄 Tier 4: GUI Control Elements (TODO)
-- Dynamic UI element creation from Lua
-- Button callbacks with custom actions
-- Text input boxes for configuration
-
-### 🔄 Tier 5: Timers & Async Operations (TODO)
-- Timer registration (one-shot and cyclic)
-- Heartbeat/keep-alive signal support
-- Integration with network transmission
 
 ## Technical Details
 

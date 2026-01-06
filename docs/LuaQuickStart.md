@@ -19,7 +19,7 @@ Create a file `scripts/my_first_script.lua`:
 -- Compute total acceleration magnitude
 log("My first Lua script loaded!")
 
-register_transform("IMU.totalAccel", function()
+on_packet("IMU", "IMU.totalAccel", function()
     local ax = get_signal("IMU.accelX")
     local ay = get_signal("IMU.accelY")
     local az = get_signal("IMU.accelZ")
@@ -37,7 +37,7 @@ end)
 ### How It Works
 
 1. Scripts in `scripts/` are automatically loaded at startup
-2. `register_transform(name, function)` creates a new signal
+2. `on_packet(packet_name, name, function)` creates a new signal
 3. Your function is called ~100 times per second (every time packets arrive)
 4. `get_signal(name)` reads the latest value of any signal
 5. Return a number to add a data point, or `nil` to skip
@@ -47,7 +47,7 @@ end)
 | Function | Purpose | Example |
 |----------|---------|---------|
 | `get_signal(name)` | Read latest value | `get_signal("GPS.speed")` |
-| `register_transform(name, func)` | Create derived signal | `register_transform("My.Signal", function() ... end)` |
+| `on_packet(packet, name, func)` | Create derived signal | `on_packet("GPS", "My.Signal", function() ... end)` |
 | `log(message)` | Print to console | `log("Script loaded")` |
 | `signal_exists(name)` | Check if signal exists | `if signal_exists("GPS.latitude") then ...` |
 
@@ -55,7 +55,8 @@ end)
 
 #### Vector Magnitude
 ```lua
-register_transform("IMU.gyroMagnitude", function()
+```lua
+on_packet("IMU", "IMU.gyroMagnitude", function()
     local gx = get_signal("IMU.gyroX")
     local gy = get_signal("IMU.gyroY")
     local gz = get_signal("IMU.gyroZ")
@@ -69,7 +70,8 @@ end)
 
 #### Unit Conversion
 ```lua
-register_transform("GPS.speedMph", function()
+```lua
+on_packet("GPS", "GPS.speedMph", function()
     local speed_ms = get_signal("GPS.speed")
     if speed_ms then
         return speed_ms * 2.237  -- m/s to mph
@@ -83,7 +85,7 @@ end)
 local filtered = nil
 local alpha = 0.1
 
-register_transform("Battery.voltageFiltered", function()
+on_packet("BAT", "Battery.voltageFiltered", function()
     local voltage = get_signal("BAT.voltage")
     if voltage then
         if filtered == nil then
@@ -99,7 +101,7 @@ end)
 
 #### Threshold Detection
 ```lua
-register_transform("Battery.lowVoltage", function()
+on_packet("BAT", "Battery.lowVoltage", function()
     local voltage = get_signal("BAT.voltage")
     if voltage then
         if voltage < 3.3 then
@@ -195,7 +197,7 @@ local LOW_VOLTAGE_THRESHOLD = 3.3
 local CRITICAL_VOLTAGE_THRESHOLD = 3.0
 
 -- Compute battery power (Watts)
-register_transform("BAT.power", function()
+on_packet("BAT", "BAT.power", function()
     local voltage = get_signal("BAT.voltage")
     local current = get_signal("BAT.current")
 
@@ -207,7 +209,7 @@ register_transform("BAT.power", function()
 end)
 
 -- Low voltage detector
-register_transform("BAT.lowVoltageWarning", function()
+on_packet("BAT", "BAT.lowVoltageWarning", function()
     local voltage = get_signal("BAT.voltage")
 
     if not voltage then
@@ -226,7 +228,7 @@ register_transform("BAT.lowVoltageWarning", function()
 end)
 
 -- Battery health indicator (0-100%)
-register_transform("BAT.healthPercent", function()
+on_packet("BAT", "BAT.healthPercent", function()
     local health = get_signal("BAT.health")
 
     if health then

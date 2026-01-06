@@ -9,8 +9,9 @@ This directory contains Lua scripts that extend the functionality of the Telemet
 - `get_signal_history(name, count)` - Get the last N values of a signal as an array
 - `signal_exists(name)` - Check if a signal exists (returns boolean)
 
-### Transform Registration
-- `register_transform(output_name, function)` - Register a function that computes a derived signal
+### Packet Callbacks
+- `on_packet(packet_name, output_name, function)` - Register a function that runs when a specific packet type is received
+  - `packet_name`: Name of the packet to trigger on (e.g., "IMU", "GPS", "BAT")
   - `output_name`: Name of the new signal to create (e.g., "IMU.accelMagnitude")
   - `function`: Lua function that returns a number or `nil`
 
@@ -22,7 +23,7 @@ This directory contains Lua scripts that extend the functionality of the Telemet
 ### accel_magnitude.lua
 Computes 3D acceleration magnitude from individual X, Y, Z components:
 ```lua
-register_transform("IMU.accelMagnitude", function()
+on_packet("IMU", "IMU.accelMagnitude", function()
     local ax = get_signal("IMU.accelX")
     local ay = get_signal("IMU.accelY")
     local az = get_signal("IMU.accelZ")
@@ -39,7 +40,7 @@ Computes 3D gyroscope magnitude from individual X, Y, Z components.
 ### battery_power.lua
 Calculates power (Watts) from voltage and current:
 ```lua
-register_transform("BAT.power", function()
+on_packet("BAT", "BAT.power", function()
     local voltage = get_signal("BAT.voltage")
     local current = get_signal("BAT.current")
     if voltage and current then
@@ -58,7 +59,11 @@ Demonstrates stateful transforms with an exponential moving average filter:
 local filtered_value = nil
 local alpha = 0.1
 
-register_transform("IMU.accelX_filtered", function()
+```lua
+local filtered_value = nil
+local alpha = 0.1
+
+on_packet("IMU", "IMU.accelX_filtered", function()
     local current = get_signal("IMU.accelX")
     if current then
         if filtered_value == nil then
@@ -75,7 +80,7 @@ end)
 ## Writing Your Own Scripts
 
 1. Create a `.lua` file in this directory
-2. Use `register_transform()` to create derived signals
+2. Use `on_packet()` to create derived signals
 3. Access existing signals with `get_signal()`
 4. Return a number or `nil` from your transform function
 5. Scripts are automatically loaded at startup
