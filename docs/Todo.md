@@ -671,32 +671,34 @@ end
 File: `scripts/io/benchmark.lua`
 
 ```lua
--- Benchmark Lua socket performance vs C++ UDPDataSink
-local socket = require("socket")
-local udp = socket.udp()
-udp:setsockname("127.0.0.1", 12345)
-udp:settimeout(0)
-
-local packetCount = 0
-local startTime = get_time_seconds()
-
--- Run for 10 seconds
-while get_time_seconds() - startTime < 10 do
-    local data, err = udp:receive()
-    if data then
-        packetCount = packetCount + 1
-        -- Minimal parsing to measure overhead
-        local timestamp = readDouble(data, 0)
-        update_signal("benchmark", timestamp, 1.0)
-    end
+-- Benchmark Lua socket performance (UDP)
+local udp = create_udp_socket()
+if udp:bind("0.0.0.0", 12345) then
+    udp:set_non_blocking(true)
 end
 
-local elapsed = get_time_seconds() - startTime
-local packetsPerSec = packetCount / elapsed
-local bytesPerSec = packetsPerSec * 128  -- Assume 128 byte packets
+local packetCount = 0
+local startTime = nil
 
-print(string.format("Benchmark: %.0f packets/sec, %.2f MB/s",
-      packetsPerSec, bytesPerSec / 1e6))
+on_frame(function()
+    if not startTime then startTime = get_time_seconds() end
+    
+    -- Drain socket
+    local count = 0
+    while count < 1000 do
+        local data, err = udp:receive(65536)
+        if not data then break end
+        packetCount = packetCount + 1
+        count = count + 1
+    end
+    
+    local elapsed = get_time_seconds() - startTime
+    if elapsed > 10 then
+        log("Benchmark: " .. (packetCount / elapsed) .. " packets/sec")
+        startTime = get_time_seconds() -- Reset
+        packetCount = 0
+    end
+end)
 ```
 
 **Performance Target**: Must achieve 10 MB/s (100,000 packets/sec @ 100 bytes each)
@@ -705,44 +707,11 @@ print(string.format("Benchmark: %.0f packets/sec, %.2f MB/s",
 
 Test plan:
 1. Run C++ version (current) and capture signals to CSV
-2. Run Lua version (`UDPDataSink.lua`) with same input stream
+2. Run Lua version (`DataSource.lua`) with same input stream
 3. Diff CSV outputs - must be identical
-
-**7.3 Example Alternative Protocols**
-
-Create examples showing flexibility:
-
-File: `scripts/io/TCPDataSink.lua`
-```lua
--- TCP streaming example
-local socket = require("socket")
-local tcp = socket.tcp()
-tcp:connect("192.168.1.100", 8080)
--- ... TCP receive loop
-```
-
-File: `scripts/io/HTTPPoller.lua`
-```lua
--- Poll REST API every N seconds
-local http = require("socket.http")
-while is_app_running() do
-    local body = http.request("http://api.example.com/telemetry")
-    -- Parse JSON and update signals
-    sleep_ms(1000)
-end
-```
-
-File: `scripts/io/SerialDataSink.lua`
-```lua
--- Serial port example (requires luars232 or similar)
--- Demonstrates flexibility beyond UDP/TCP
-```
 
 **Files to create:**
 - `scripts/io/benchmark.lua` - Performance testing
-- `scripts/io/TCPDataSink.lua` - TCP example
-- `scripts/io/HTTPPoller.lua` - HTTP polling example
-- `scripts/io/SerialDataSink.lua` - Serial example (if library available)
 
 ---
 

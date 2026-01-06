@@ -1,140 +1,53 @@
--- Tier 5: Performance Benchmark
--- Measures Lua socket performance vs C++ UDPDataSink
--- Target: 10 MB/s (100,000 packets/sec @ 100 bytes each)
+-- Benchmark Lua socket performance (UDP)
+-- Run this script to measure packet reception throughput
 
-print("========================================")
-print("Lua Socket Performance Benchmark")
-print("========================================")
+local udp = create_udp_socket()
+local BIND_PORT = 12346 -- Use different port than main data to avoid conflict
 
-local socket = require("socket")
-
--- Configuration
-local BENCHMARK_IP = "127.0.0.1"
-local BENCHMARK_PORT = 12346  -- Different port to avoid conflicts
-local BENCHMARK_DURATION = 10.0  -- seconds
-
-print(string.format("Binding to %s:%d", BENCHMARK_IP, BENCHMARK_PORT))
-
--- Create and bind UDP socket
-local udp, err = socket.udp()
-if not udp then
-    print("❌ FAILED: Could not create UDP socket: " .. tostring(err))
-    return
-end
-
-local success, bindErr = udp:setsockname(BENCHMARK_IP, BENCHMARK_PORT)
-if not success then
-    print("❌ FAILED: Could not bind socket: " .. tostring(bindErr))
-    udp:close()
-    return
-end
-
--- Set non-blocking mode
-udp:settimeout(0)
-
-print("✓ Socket bound successfully")
-print("")
-print("BENCHMARK INSTRUCTIONS:")
-print("1. Run mock_device on port 12346 to send test packets")
-print("2. This benchmark will receive packets for 10 seconds")
-print("3. Results will show packets/sec and MB/s throughput")
-print("")
-print("Waiting for packets... (will timeout after 10 seconds if no data)")
-print("========================================")
-
--- Benchmark variables
-local packetCount = 0
-local totalBytes = 0
-local startTime = get_time_seconds()
-local firstPacketReceived = false
-local benchmarkStartTime = 0
-
--- Receive loop
-while true do
-    local currentTime = get_time_seconds()
-
-    -- Check if benchmark duration exceeded
-    if firstPacketReceived and (currentTime - benchmarkStartTime) >= BENCHMARK_DURATION then
-        break
-    end
-
-    -- Timeout if no packets received in 10 seconds
-    if not firstPacketReceived and (currentTime - startTime) > BENCHMARK_DURATION then
-        print("⚠ No packets received within 10 seconds")
-        print("Make sure mock_device is sending to port " .. BENCHMARK_PORT)
-        break
-    end
-
-    -- Receive packet
-    local data, recvErr = udp:receive()
-
-    if data then
-        if not firstPacketReceived then
-            benchmarkStartTime = currentTime
-            firstPacketReceived = true
-            print("✓ First packet received, benchmark started!")
-        end
-
-        packetCount = packetCount + 1
-        totalBytes = totalBytes + #data
-
-        -- Minimal parsing to measure overhead (read timestamp)
-        local timestamp = readDouble(data, 0)
-        if timestamp then
-            -- Create a benchmark signal (optional)
-            -- update_signal("benchmark.packets", timestamp, packetCount)
-        end
-
-        -- Print progress every 1000 packets
-        if packetCount % 1000 == 0 then
-            local elapsed = currentTime - benchmarkStartTime
-            local pps = packetCount / elapsed
-            local mbps = (totalBytes / elapsed) / 1e6
-            print(string.format("  Progress: %d packets, %.0f pps, %.2f MB/s",
-                              packetCount, pps, mbps))
-        end
-    elseif recvErr ~= "timeout" then
-        print("Socket error: " .. tostring(recvErr))
-        break
-    end
-
-    -- Small sleep to avoid CPU spinning
-    sleep_ms(1)
-end
-
--- Close socket
-udp:close()
-
--- Calculate and display results
-if packetCount > 0 then
-    local elapsed = get_time_seconds() - benchmarkStartTime
-    local packetsPerSec = packetCount / elapsed
-    local bytesPerSec = totalBytes / elapsed
-    local mbPerSec = bytesPerSec / 1e6
-    local avgPacketSize = totalBytes / packetCount
-
-    print("")
-    print("========================================")
-    print("BENCHMARK RESULTS")
-    print("========================================")
-    print(string.format("Duration:          %.2f seconds", elapsed))
-    print(string.format("Packets received:  %d", packetCount))
-    print(string.format("Total bytes:       %.2f MB", totalBytes / 1e6))
-    print(string.format("Avg packet size:   %.0f bytes", avgPacketSize))
-    print(string.format("Throughput:        %.0f packets/sec", packetsPerSec))
-    print(string.format("Throughput:        %.2f MB/s", mbPerSec))
-    print("")
-
-    -- Check if target met
-    if mbPerSec >= 10.0 then
-        print("✓ SUCCESS: Meets 10 MB/s target!")
-    else
-        print(string.format("⚠ WARNING: Below 10 MB/s target (%.2f MB/s)", mbPerSec))
-    end
-
-    print("========================================")
+if udp:bind("0.0.0.0", BIND_PORT) then
+    udp:set_non_blocking(true)
+    log("Benchmark receiver bound to " .. BIND_PORT)
 else
-    print("========================================")
-    print("❌ BENCHMARK FAILED: No packets received")
-    print("========================================")
+    log("Benchmark failed to bind " .. BIND_PORT)
 end
+
+local packetCount = 0
+local byteCount = 0
+local startTime = nil
+local running = true
+
+on_frame(function()
+    if not running or not udp then return end
+    if not startTime then startTime = get_time_seconds() end
+    
+    -- Drain socket (up to 2000 packets per frame to stress test)
+    local count = 0
+    while count < 2000 do
+        local data, err = udp:receive(65536)
+        if not data then break end
+        packetCount = packetCount + 1
+        byteCount = byteCount + #data
+        count = count + 1
+    end
+    
+    local currentTime = get_time_seconds()
+    local elapsed = currentTime - startTime
+    
+    -- Report every 1 second
+    if elapsed >= 1.0 then
+        local pps = packetCount / elapsed
+        local mbps = (byteCount / elapsed) / (1024 * 1024)
+        
+        log(string.format("Benchmark: %.0f pps, %.2f MB/s", pps, mbps))
+        
+        -- Reset counters
+        startTime = currentTime
+        packetCount = 0
+        byteCount = 0
+    end
+end)
+
+on_cleanup(function()
+    if udp then udp:close() end
+    running = false
+end)

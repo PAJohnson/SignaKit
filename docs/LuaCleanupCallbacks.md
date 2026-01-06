@@ -39,62 +39,61 @@ end)
 
 ## Complete Examples
 
-### Example 1: Network Socket Cleanup
+### Example 1: UDP Socket Cleanup
 
 ```lua
--- File: scripts/callbacks/network_client.lua
--- Manages a persistent network connection with proper cleanup
+-- File: scripts/callbacks/udp_receiver.lua
+-- Manages a UDP socket for receiving data with proper cleanup
 
-local socket = require("socket")
-local tcp_socket = nil
-local connected = false
+local udp_socket = nil
 
--- Initialize connection
-local function connect_to_server()
-    tcp_socket = socket.tcp()
-    tcp_socket:settimeout(0)  -- Non-blocking
-
-    local success, err = tcp_socket:connect("127.0.0.1", 5000)
-    if success then
-        connected = true
-        log("Connected to server at 127.0.0.1:5000")
+-- Initialize UDP socket
+local function init_network()
+    udp_socket = create_udp_socket()
+    if udp_socket then
+        -- Bind to port 5000
+        if udp_socket:bind("0.0.0.0", 5000) then
+            udp_socket:set_non_blocking(true)
+            log("UDP Socket bound to port 5000")
+        else
+            log("Failed to bind UDP socket")
+            udp_socket = nil
+        end
     else
-        connected = false
-        log("Failed to connect: " .. tostring(err))
+         log("Failed to create UDP socket")
     end
 end
 
 -- Register cleanup callback
 on_cleanup(function()
-    log("[Cleanup] Closing network socket...")
-    if tcp_socket then
-        tcp_socket:close()
-        tcp_socket = nil
-        connected = false
+    log("[Cleanup] Closing UDP socket...")
+    if udp_socket then
+        udp_socket:close()
+        udp_socket = nil
     end
 end)
 
 -- Initialize on load
-connect_to_server()
+init_network()
 
--- Frame callback to send data
+-- Frame callback to receive data
 on_frame(function()
-    if connected and get_button_clicked("Send Data") then
-        local data = get_text_input("Data Input")
-        if data then
-            local bytes, err = tcp_socket:send(data .. "\n")
-            if err then
-                log("Send error: " .. err)
-                connected = false
-            else
-                log("Sent: " .. data)
+    if udp_socket then
+        -- Drain socket
+        local max_packets = 10
+        for i = 1, max_packets do
+            local data, err = udp_socket:receive(1024)
+            if data and #data > 0 then
+                log("Received " .. #data .. " bytes")
+            elseif err == "timeout" then
+                break -- No more data
             end
         end
     end
-
-    -- Try to reconnect if disconnected
-    if not connected and get_button_clicked("Reconnect") then
-        connect_to_server()
+    
+    -- Re-initialize if closed (e.g. by external error)
+    if not udp_socket and get_button_clicked("Reconnect") then
+        init_network()
     end
 end)
 ```
@@ -161,17 +160,17 @@ end)
 -- File: scripts/callbacks/multi_resource.lua
 -- Demonstrates managing multiple resources with separate cleanup callbacks
 
-local socket = require("socket")
 local udp_socket = nil
 local log_file = nil
 local timer_id = 12345  -- Hypothetical timer ID
 
 -- Initialize UDP socket
 local function init_udp()
-    udp_socket = socket.udp()
-    udp_socket:settimeout(0)
-    udp_socket:setsockname("*", 0)
-    log("UDP socket initialized")
+    udp_socket = create_udp_socket()
+    if udp_socket:bind("0.0.0.0", 5001) then
+        udp_socket:set_non_blocking(true)
+        log("UDP socket initialized on port 5001")
+    end
 end
 
 -- Initialize log file
@@ -209,12 +208,12 @@ init_log()
 
 on_frame(function()
     -- Use resources here
-    if get_button_clicked("Send Command") then
-        local cmd = get_text_input("Command")
-        if udp_socket and cmd then
-            udp_socket:sendto(cmd, "192.168.1.100", 5000)
+     if udp_socket then
+        local data, err = udp_socket:receive(1024)
+        if data then
+            log("Received via UDP: " .. data)
             if log_file then
-                log_file:write(os.date() .. ": " .. cmd .. "\n")
+                log_file:write(os.date() .. ": " .. data .. "\n")
                 log_file:flush()
             end
         end
@@ -270,58 +269,7 @@ on_frame(function()
 end)
 ```
 
-### Example 5: Graceful Connection Shutdown
 
-```lua
--- File: scripts/callbacks/graceful_shutdown.lua
--- Sends a disconnect message before closing the connection
-
-local socket = require("socket")
-local tcp_socket = nil
-local connected = false
-
--- Connect to server
-local function connect()
-    tcp_socket = socket.tcp()
-    tcp_socket:settimeout(0)
-
-    if tcp_socket:connect("127.0.0.1", 5000) then
-        connected = true
-        -- Send hello message
-        tcp_socket:send("HELLO\n")
-        log("Connected and sent HELLO")
-    end
-end
-
--- Cleanup with graceful disconnect
-on_cleanup(function()
-    log("[Cleanup] Disconnecting gracefully...")
-    if tcp_socket and connected then
-        -- Send goodbye message before closing
-        tcp_socket:settimeout(1)  -- Brief blocking for final send
-        tcp_socket:send("GOODBYE\n")
-
-        -- Give server time to receive
-        socket.sleep(0.1)
-
-        tcp_socket:close()
-        log("Disconnected")
-    end
-    tcp_socket = nil
-    connected = false
-end)
-
-connect()
-
-on_frame(function()
-    if connected then
-        -- Heartbeat every 60 frames
-        if get_frame_number() % 60 == 0 then
-            tcp_socket:send("PING\n")
-        end
-    end
-end)
-```
 
 ---
 

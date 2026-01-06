@@ -429,24 +429,49 @@ You can implement network communication (UDP/Serial) entirely in Lua using exter
 
 **Important**: When using persistent resources like sockets or file handles, always use cleanup callbacks to prevent resource leaks on script reload. See [LuaCleanupCallbacks.md](LuaCleanupCallbacks.md) for details.
 
-**Example**: Simple UDP Command Sender
+**Example**: UDP Receiver Configuration
 ```lua
-local socket = require("socket")
-local udp = socket.udp()
-udp:settimeout(0)
+local udp_socket = nil
 
--- IMPORTANT: Register cleanup to close socket on reload
+-- Function to recreate socket with new port
+local function bind_socket(port)
+    if udp_socket then udp_socket:close() end
+    udp_socket = create_udp_socket()
+    if udp_socket:bind("0.0.0.0", port) then
+        udp_socket:set_non_blocking(true)
+        log("Bound to port " .. port)
+    else
+        log("Failed to bind port " .. port)
+        udp_socket = nil
+    end
+end
+
+-- Cleanup
 on_cleanup(function()
-    if udp then udp:close() end
+    if udp_socket then udp_socket:close() end
 end)
 
+-- Initial bind
+bind_socket(12345)
+set_text_input("Port", "12345")
+
 on_frame(function()
-    if get_button_clicked("Send Command") then
-        local cmd = get_text_input("Command Input")
-        if cmd then
-            udp:sendto(cmd, "192.168.1.100", 5000)
-            log("Sent: " .. cmd)
-            set_text_input("Command Input", "")  -- Clear input
+    -- Re-bind if "Apply Port" button clicked
+    if get_button_clicked("Apply Port") then
+        local port_str = get_text_input("Port")
+        if port_str then
+            local port = tonumber(port_str)
+            if port then
+                bind_socket(port)
+            end
+        end
+    end
+
+    -- Process incoming data
+    if udp_socket then
+        local data, err = udp_socket:receive(1024)
+        if data then
+            log("Received: " .. data)
         end
     end
 end)
