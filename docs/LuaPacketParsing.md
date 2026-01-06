@@ -4,33 +4,108 @@
 
 **Tier 2** of Lua scripting enables **custom packet parsers** written entirely in Lua. This allows you to handle any packet format (binary, JSON, CSV, Protobuf, encrypted, etc.) without recompiling the GUI.
 
-The C++ I/O layer (UDP/TCP/Serial) handles raw socket operations, while Lua scripts parse the received bytes and update signals.
+**Tier 2** enabled custom packet parsers in Lua, and **Tier 5** expanded this to move the entire network I/O layer into Lua scripts.
+
+The system now runs a unified I/O script (like `scripts/io/DataSource.lua`) via a frame callback. This script handles socket creation, non-blocking data reception, and dispatching data to parsers.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│  C++ I/O Layer (UDP/TCP/Serial)         │
-│  - Socket management                    │
-│  - Raw byte buffer reception            │
-│  - Thread safety (stateMutex)           │
-└──────────────┬──────────────────────────┘
-               │ Raw bytes (buffer, length)
-               ▼
-┌─────────────────────────────────────────┐
-│  Lua Parser Chain                       │
-│  - Try each registered parser in order  │
-│  - First parser that returns true wins  │
-│  - Parse bytes, extract fields           │
-└──────────────┬──────────────────────────┘
-               │ update_signal(name, time, value)
-               ▼
-┌─────────────────────────────────────────┐
-│  Signal Registry (C++)                  │
-│  - Shared state for plotting/analysis   │
-└─────────────────────────────────────────┘
+┌───────────────────────────────────────────────┐
+│  Main GUI Thread (60 FPS)                     │
+│                                               │
+│  ┌─────────────────────────────────────────┐  │
+│  │  Lua I/O Script (e.g. DataSource.lua)   │  │
+│  │  - Runs via on_frame() callback         │  │
+│  │  - Manages non-blocking sockets         │  │
+│  │  - Receives raw bytes                   │  │
+│  └──────────────────┬──────────────────────┘  │
+│                     │ parse_packet(data)      │
+│                     ▼                         │
+│  ┌─────────────────────────────────────────┐  │
+│  │  Lua Parser Chain                       │  │
+│  │  - Registered via register_parser()     │  │
+│  │  - Parses bytes, extracts fields        │  │
+│  └──────────────────┬──────────────────────┘  │
+│                     │ update_signal()         │
+│                     ▼                         │
+│  ┌─────────────────────────────────────────┐  │
+│  │  Signal Registry (C++)                  │  │
+│  │  - Thread-safe storage for GUI          │  │
+│  └─────────────────────────────────────────┘  │
+└───────────────────────────────────────────────┘
+```
+
+---
+
+## Lua I/O & Socket API (Tier 5)
+
+The networking layer is built around `LuaUDPSocket`, a thin wrapper around the `sockpp` library.
+
+### Key Concepts
+
+1.  **Main Thread Execution**: I/O scripts run in the main GUI thread (~60Hz).
+2.  **Non-Blocking I/O**: Sockets **MUST** be set to non-blocking mode. Blocking operations will freeze the GUI.
+3.  **Frame callbacks**: Use `on_frame(function)` to register your I/O loop.
+
+### Socket Functions
+
+#### `create_udp_socket()`
+Creates a new UDP socket instance.
+**Returns:** `LuaUDPSocket` object or `nil` on failure.
+
+#### `LuaUDPSocket` Methods
+
+-   `udp:bind(host, port)` -> `bool`
+    -   Binds to a local interface and port (e.g., "0.0.0.0", 12345).
+-   `udp:set_non_blocking(enabled)` -> `bool`
+    -   **CRITICAL**: Always call this with `true` immediately after creation.
+-   `udp:receive(max_size)` -> `data`, `error`
+    -   `data` (string): Received bytes (empty if no data).
+    -   `error` (string): Error message ("timeout" means no data available in non-blocking mode, "closed" means socket closed).
+-   `udp:close()`
+    -   Closes the socket.
+-   `udp:is_open()` -> `bool`
+    -   Checks if the socket is open.
+
+### Example: I/O Script (`DataSource.lua`)
+
+This pattern is used in `scripts/io/DataSource.lua` to handle high-bandwidth telemetry without blocking.
+
+```lua
+local udpSocket = nil
+
+function setup_network()
+    udpSocket = create_udp_socket()
+    udpSocket:bind("0.0.0.0", 12345)
+    udpSocket:set_non_blocking(true)  -- ESSENTIAL!
+end
+
+function on_data_frame()
+    if not udpSocket then return end
+
+    -- Drain the socket: read all available packets this frame
+    while true do
+        local data, err = udpSocket:receive(65536)
+
+        if data and #data > 0 then
+            -- Pass raw bytes to the parser chain
+            parse_packet(data, #data)
+        elseif err == "timeout" then
+            -- No more data available right now, stop reading
+            break
+        else
+            -- Real error or socket closed
+            log("Socket error: " .. tostring(err))
+            break
+        end
+    end
+end
+
+-- Run every frame (60 FPS)
+on_frame(on_data_frame)
 ```
 
 ---
@@ -600,9 +675,9 @@ scripts/parsers/
 
 ## Next Steps
 
-- **Tier 3**: Frame callbacks, GUI monitoring, event-based alerting
-- **Tier 4**: Dynamic GUI elements, button callbacks, network transmission from Lua
-- **Tier 5**: Timers, async operations, heartbeat signals
+- **Tier 3**: Frame callbacks, GUI monitoring, event-based alerting (Complete)
+- **Tier 4**: Dynamic GUI elements, button callbacks (Complete)
+- **Tier 5**: Lua Network I/O, `sockpp` integration, non-blocking sockets (Complete)
 
 ---
 
