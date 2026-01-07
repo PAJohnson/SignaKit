@@ -33,6 +33,7 @@
 // DPI Awareness
 #include <windows.h>
 #include <ShellScalingApi.h>
+#include <timeapi.h> // For timeBeginPeriod
 
 #include "types.hpp"
 #include "LuaScriptManager.hpp"
@@ -423,17 +424,25 @@ int main(int, char **) {
   // Scan available parsers for dropdown menu
   scanAvailableParsers(availableParsers);
 
+  // Enable high-resolution timers on Windows
+  #ifdef _WIN32
+  timeBeginPeriod(1);
+  #endif
+
   SDL_Event event;
   while (appRunning) {
-    // Use SDL_WaitEventTimeout to reduce CPU usage when idle
-    // 16ms timeout targets ~60 FPS, allowing the OS to idle the thread
-    if (SDL_WaitEventTimeout(&event, 16)) {
-      // Process the event that woke us up
-      do {
+    // Process all pending events immediately
+    while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
         if (event.type == SDL_QUIT)
-          appRunning = false;
-      } while (SDL_PollEvent(&event)); // Drain any remaining events
+            appRunning = false;
+        
+        // Handle window close events for individual plots
+        if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) {
+            if (SDL_GetWindowFromID(event.window.windowID) == window) {
+                appRunning = false;
+            }
+        }
     }
 
     MainLoopStep(&ctx);
@@ -452,6 +461,11 @@ int main(int, char **) {
   SDL_Quit();
 
   WSACleanup();
+
+  // Cleanup timers
+  #ifdef _WIN32
+  timeEndPeriod(1);
+  #endif
 
   return 0;
 }

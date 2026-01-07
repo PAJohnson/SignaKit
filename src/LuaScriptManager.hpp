@@ -64,7 +64,12 @@ public:
                 return false;
             }
             is_bound = true;
-            printf("[LuaUDPSocket] Bound to %s:%d\n", host.c_str(), port);
+            
+            // Increase receive buffer to handle bursts and GUI stalls (1MB)
+            int bufSize = 1024 * 1024;
+            socket.set_option(SOL_SOCKET, SO_RCVBUF, bufSize);
+            
+            printf("[LuaUDPSocket] Bound to %s:%d (RCVBUF set to 1MB)\n", host.c_str(), port);
             return true;
         } catch (const std::exception& e) {
             printf("[LuaUDPSocket] Exception binding: %s\n", e.what());
@@ -449,7 +454,6 @@ public:
             scripts.push_back(LuaScript(name, filepath));
             printf("[LuaScriptManager] Loaded script: %s\n", name.c_str());
             return true;
-
         } catch (const std::exception& e) {
             printf("[LuaScriptManager] Exception loading %s: %s\n", filepath.c_str(), e.what());
             return false;

@@ -62,17 +62,18 @@ void imu_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
 
     std::cout << "[IMU] Thread started (" << RATE_IMU << " Hz)..." << std::endl;
 
-    double lastBurstTime = get_time();
+    double startTime = get_time();
+    long long packetsSent = 0;
+
     while (running) {
-        auto burstStart = std::chrono::steady_clock::now();
-        double currentTime = get_time();
-        double timeSinceLastBurst = currentTime - lastBurstTime;
-        int packetsToSend = (int)(timeSinceLastBurst * RATE_IMU);
+        double elapsed = get_time() - startTime;
+        long long targetPackets = (long long)(elapsed * RATE_IMU);
+        int toSend = (int)(targetPackets - packetsSent);
 
-        if (packetsToSend > 100) packetsToSend = 100;
+        if (toSend > 100) toSend = 100; // Cap burst size
 
-        for (int i = 0; i < packetsToSend; i++) {
-            double t = lastBurstTime + (i + 1) * (1.0 / RATE_IMU);
+        for (int i = 0; i < toSend; i++) {
+            double t = (packetsSent + i) * (1.0 / RATE_IMU);
             packet.time = t;
             packet.accelX = (float)sin(2.0 * M_PI * 5 * t) + (float)sin(2.0 * M_PI * 25 * t);
             packet.accelY = (float)cos(t);
@@ -97,7 +98,7 @@ void imu_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
             sendto(sockfd, (const char*)&packet, sizeof(packet), 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
         }
 
-        if (packetsToSend > 0) lastBurstTime = currentTime;
+        packetsSent += toSend;
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_INTERVAL_MS));
     }
 }
@@ -110,15 +111,18 @@ void gps_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
 
     double base_lat = 40.7128;
     double base_lon = -74.0060;
-    double lastBurstTime = get_time();
+    double startTime = get_time();
+    long long packetsSent = 0;
 
     while (running) {
-        double currentTime = get_time();
-        int packetsToSend = (int)((currentTime - lastBurstTime) * RATE_GPS);
-        if (packetsToSend > 50) packetsToSend = 50;
+        double elapsed = get_time() - startTime;
+        long long targetPackets = (long long)(elapsed * RATE_GPS);
+        int toSend = (int)(targetPackets - packetsSent);
 
-        for (int i = 0; i < packetsToSend; i++) {
-            double t = lastBurstTime + (i + 1) * (1.0 / RATE_GPS);
+        if (toSend > 50) toSend = 50;
+
+        for (int i = 0; i < toSend; i++) {
+            double t = (packetsSent + i) * (1.0 / RATE_GPS);
             packet.time = t;
             packet.latitude = base_lat + (0.001 * sin(t * 0.2));
             packet.longitude = base_lon + (0.001 * cos(t * 0.2));
@@ -129,7 +133,7 @@ void gps_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
             packet.fixType = 3;
             sendto(sockfd, (const char*)&packet, sizeof(packet), 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
         }
-        if (packetsToSend > 0) lastBurstTime = currentTime;
+        packetsSent += toSend;
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_INTERVAL_MS));
     }
 }
@@ -140,19 +144,23 @@ void battery_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
     memcpy(packet.header, "BAT", 4);
     std::cout << "[Battery] Thread started (" << RATE_BATTERY << " Hz)..." << std::endl;
 
-    double lastBurstTime = get_time();
+    double startTime = get_time();
+    long long packetsSent = 0;
+
     while (running) {
-        double currentTime = get_time();
-        int packetsToSend = (int)((currentTime - lastBurstTime) * RATE_BATTERY);
-        for (int i = 0; i < packetsToSend; i++) {
-            double t = lastBurstTime + (i + 1) * (1.0 / RATE_BATTERY);
+        double elapsed = get_time() - startTime;
+        long long targetPackets = (long long)(elapsed * RATE_BATTERY);
+        int toSend = (int)(targetPackets - packetsSent);
+
+        for (int i = 0; i < toSend; i++) {
+            double t = (packetsSent + i) * (1.0 / RATE_BATTERY);
             packet.time = t;
             packet.voltage = 12.0f + 0.5f * (float)sin(t * 0.1);
             packet.current = 5.0f + 2.0f * (float)cos(t * 0.15);
             packet.percentage = (uint8_t)(100 - (int)(t / 10.0) % 100);
             sendto(sockfd, (const char*)&packet, sizeof(packet), 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
         }
-        if (packetsToSend > 0) lastBurstTime = currentTime;
+        packetsSent += toSend;
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_INTERVAL_MS));
     }
 }
@@ -163,20 +171,23 @@ void lidar_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
     memcpy(packet.header, "LID", 4);
     std::cout << "[LIDAR] Thread started (" << RATE_LIDAR << " Hz)..." << std::endl;
 
-    double lastBurstTime = get_time();
-    while (running) {
-        double currentTime = get_time();
-        int packetsToSend = (int)((currentTime - lastBurstTime) * RATE_LIDAR);
-        if (packetsToSend > 50) packetsToSend = 50;
+    double startTime = get_time();
+    long long packetsSent = 0;
 
-        for (int i = 0; i < packetsToSend; i++) {
-            double t = lastBurstTime + (i + 1) * (1.0 / RATE_LIDAR);
+    while (running) {
+        double elapsed = get_time() - startTime;
+        long long targetPackets = (long long)(elapsed * RATE_LIDAR);
+        int toSend = (int)(targetPackets - packetsSent);
+        if (toSend > 50) toSend = 50;
+
+        for (int i = 0; i < toSend; i++) {
+            double t = (packetsSent + i) * (1.0 / RATE_LIDAR);
             packet.time = t;
             packet.numTracks = 8 + (uint8_t)(sin(t * 0.5) * 4);
             packet.range = 10.0f + 5.0f * (float)sin(t);
             sendto(sockfd, (const char*)&packet, sizeof(packet), 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
         }
-        if (packetsToSend > 0) lastBurstTime = currentTime;
+        packetsSent += toSend;
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_INTERVAL_MS));
     }
 }
@@ -187,20 +198,23 @@ void radar_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
     memcpy(packet.header, "RAD", 4);
     std::cout << "[RADAR] Thread started (" << RATE_RADAR << " Hz)..." << std::endl;
 
-    double lastBurstTime = get_time();
-    while (running) {
-        double currentTime = get_time();
-        int packetsToSend = (int)((currentTime - lastBurstTime) * RATE_RADAR);
-        if (packetsToSend > 50) packetsToSend = 50;
+    double startTime = get_time();
+    long long packetsSent = 0;
 
-        for (int i = 0; i < packetsToSend; i++) {
-            double t = lastBurstTime + (i + 1) * (1.0 / RATE_RADAR);
+    while (running) {
+        double elapsed = get_time() - startTime;
+        long long targetPackets = (long long)(elapsed * RATE_RADAR);
+        int toSend = (int)(targetPackets - packetsSent);
+        if (toSend > 50) toSend = 50;
+
+        for (int i = 0; i < toSend; i++) {
+            double t = (packetsSent + i) * (1.0 / RATE_RADAR);
             packet.time = t;
             packet.targetCount = (uint8_t)(3 + ((int)t % 5));
             packet.range = 50.0f + 20.0f * (float)sin(t * 0.2);
             sendto(sockfd, (const char*)&packet, sizeof(packet), 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
         }
-        if (packetsToSend > 0) lastBurstTime = currentTime;
+        packetsSent += toSend;
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_INTERVAL_MS));
     }
 }
@@ -211,18 +225,22 @@ void state_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
     memcpy(packet.header, "STA", 4);
     std::cout << "[State] Thread started (" << RATE_STATE << " Hz)..." << std::endl;
 
-    double lastBurstTime = get_time();
+    double startTime = get_time();
+    long long packetsSent = 0;
+
     while (running) {
-        double currentTime = get_time();
-        int packetsToSend = (int)((currentTime - lastBurstTime) * RATE_STATE);
-        for (int i = 0; i < packetsToSend; i++) {
-            double t = lastBurstTime + (i + 1) * (1.0 / RATE_STATE);
+        double elapsed = get_time() - startTime;
+        long long targetPackets = (long long)(elapsed * RATE_STATE);
+        int toSend = (int)(targetPackets - packetsSent);
+
+        for (int i = 0; i < toSend; i++) {
+            double t = (packetsSent + i) * (1.0 / RATE_STATE);
             packet.time = t;
             packet.cpuUsage = 50.0f + 20.0f * (float)sin(t * 0.3);
             packet.memoryUsage = 60.0f + 15.0f * (float)cos(t * 0.2);
             sendto(sockfd, (const char*)&packet, sizeof(packet), 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
         }
-        if (packetsToSend > 0) lastBurstTime = currentTime;
+        packetsSent += toSend;
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_INTERVAL_MS));
     }
 }
@@ -233,17 +251,21 @@ void debug_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
     memcpy(packet.header, "DBG", 4);
     std::cout << "[Debug] Thread started (" << RATE_DEBUG << " Hz)..." << std::endl;
 
-    double lastBurstTime = get_time();
+    double startTime = get_time();
+    long long packetsSent = 0;
+
     while (running) {
-        double currentTime = get_time();
-        int packetsToSend = (int)((currentTime - lastBurstTime) * RATE_DEBUG);
-        for (int i = 0; i < packetsToSend; i++) {
-            double t = lastBurstTime + (i + 1) * (1.0 / RATE_DEBUG);
+        double elapsed = get_time() - startTime;
+        long long targetPackets = (long long)(elapsed * RATE_DEBUG);
+        int toSend = (int)(targetPackets - packetsSent);
+
+        for (int i = 0; i < toSend; i++) {
+            double t = (packetsSent + i) * (1.0 / RATE_DEBUG);
             packet.time = t;
             packet.metric = (float)(100.0 * sin(t * 0.5));
             sendto(sockfd, (const char*)&packet, sizeof(packet), 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
         }
-        if (packetsToSend > 0) lastBurstTime = currentTime;
+        packetsSent += toSend;
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_INTERVAL_MS));
     }
 }
@@ -254,20 +276,23 @@ void motor_thread_func(socket_t sockfd, sockaddr_in dest_addr) {
     memcpy(packet.header, "MTR", 4);
     std::cout << "[Motor] Thread started (" << RATE_MOTOR << " Hz)..." << std::endl;
 
-    double lastBurstTime = get_time();
-    while (running) {
-        double currentTime = get_time();
-        int packetsToSend = (int)((currentTime - lastBurstTime) * RATE_MOTOR);
-        if (packetsToSend > 50) packetsToSend = 50;
+    double startTime = get_time();
+    long long packetsSent = 0;
 
-        for (int i = 0; i < packetsToSend; i++) {
-            double t = lastBurstTime + (i + 1) * (1.0 / RATE_MOTOR);
+    while (running) {
+        double elapsed = get_time() - startTime;
+        long long targetPackets = (long long)(elapsed * RATE_MOTOR);
+        int toSend = (int)(targetPackets - packetsSent);
+        if (toSend > 50) toSend = 50;
+
+        for (int i = 0; i < toSend; i++) {
+            double t = (packetsSent + i) * (1.0 / RATE_MOTOR);
             packet.time = t;
             packet.rpm = (int16_t)(3000 + 500 * sin(t * 0.5));
             packet.torque = 50.0f + 10.0f * (float)cos(t * 0.3);
             sendto(sockfd, (const char*)&packet, sizeof(packet), 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
         }
-        if (packetsToSend > 0) lastBurstTime = currentTime;
+        packetsSent += toSend;
         std::this_thread::sleep_for(std::chrono::milliseconds(SLEEP_INTERVAL_MS));
     }
 }
