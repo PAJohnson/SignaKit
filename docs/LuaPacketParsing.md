@@ -56,61 +56,100 @@ The networking layer is built around `LuaUDPSocket`, a thin wrapper around the `
 Creates a new UDP socket instance.
 **Returns:** `LuaUDPSocket` object or `nil` on failure.
 
+#### `SharedBuffer.new(size)`
+Creates a high-performance C++ managed memory buffer.
+- `buf:get_ptr()`: Returns a `lightuserdata` (raw pointer) for C++ calls.
+- `buf:get_size()`: Returns buffer size.
+
 #### `LuaUDPSocket` Methods
 
 -   `udp:bind(host, port)` -> `bool`
-    -   Binds to a local interface and port (e.g., "0.0.0.0", 12345).
 -   `udp:set_non_blocking(enabled)` -> `bool`
-    -   **CRITICAL**: Always call this with `true` immediately after creation.
--   `udp:receive(max_size)` -> `data`, `error`
-    -   `data` (string): Received bytes (empty if no data).
-    -   `error` (string): Error message ("timeout" means no data available in non-blocking mode, "closed" means socket closed).
--   `udp:close()`
-    -   Closes the socket.
--   `udp:is_open()` -> `bool`
-    -   Checks if the socket is open.
+-   `udp:receive(max_size)` -> `data`, `error` (Legacy string-based receive)
+-   `udp:receive_ptr(ptr, max_size)` -> `len`, `error` (**Tier 5: Zero-Copy**)
+    -   `ptr`: `lightuserdata` from `SharedBuffer:get_ptr()`.
+    -   Efficiently receives data directly into managed memory.
 
-### Example: I/O Script (`DataSource.lua`)
+### Example: Hyper-Optimized I/O (`DataSource.lua`)
 
-This pattern is used in `scripts/io/DataSource.lua` to handle high-bandwidth telemetry without blocking.
+This pattern is used for high-bandwidth telemetry (100k+ pkts/sec).
 
 ```lua
-local udpSocket = nil
-
-function setup_network()
-    udpSocket = create_udp_socket()
-    udpSocket:bind("0.0.0.0", 12345)
-    udpSocket:set_non_blocking(true)  -- ESSENTIAL!
-end
+local ffi = require("ffi")
+local RECV_BUFFER_SIZE = 65536
+local sharedBuffer = SharedBuffer.new(RECV_BUFFER_SIZE)
+local rawPtr = sharedBuffer:get_ptr() -- lightuserdata
+local recvBuffer = ffi.cast("uint8_t*", rawPtr) -- FFI access
 
 function on_data_frame()
-    if not udpSocket then return end
-
-    -- Drain the socket: read all available packets this frame
     while true do
-        local data, err = udpSocket:receive(65536)
+        -- Zero-copy receive directly into sharedBuffer
+        local len, err = udpSocket:receive_ptr(rawPtr, RECV_BUFFER_SIZE)
 
-        if data and #data > 0 then
-            -- Pass raw bytes to the parser chain
-            parse_packet(data, #data)
+        if len > 0 then
+            -- Pass pointer to parser chain
+            parse_packet_ptr(rawPtr, len)
         elseif err == "timeout" then
-            -- No more data available right now, stop reading
             break
         else
-            -- Real error or socket closed
-            log("Socket error: " .. tostring(err))
+            log("Error: " .. tostring(err))
             break
         end
     end
 end
-
--- Run every frame (60 FPS)
-on_frame(on_data_frame)
 ```
 
 ---
 
-## Lua Parser API
+## Tier 5: Hyper-Optimized Parsing (FFI)
+
+For maximum performance, use **LuaJIT FFI** to map binary data directly to C structs.
+
+### Fast Signal Updates
+
+```lua
+-- Returns integer ID for O(1) lookup
+local sigId = get_signal_id("IMU.accelX")
+
+-- Fast C++ call (no string lookups)
+update_signal_fast(sigId, timestamp, value)
+```
+
+### Complete FFI Example (`fast_binary.lua`)
+
+```lua
+local ffi = require("ffi")
+
+ffi.cdef[[
+    struct __attribute__((packed)) IMUData {
+        char header[4];
+        double time;
+        float accelX; float accelY; float accelZ;
+        -- ...
+    };
+]]
+
+local sigs = {
+    accelX = get_signal_id("IMU.accelX")
+}
+
+register_parser("fast_binary", function(raw_ptr, len)
+    local header = ffi.string(raw_ptr, 3)
+    if header == "IMU" then
+        local packet = ffi.cast("struct IMUData*", raw_ptr)
+        update_signal_fast(sigs.accelX, packet.time, packet.accelX)
+        return true
+    end
+    return false
+end)
+```
+
+---
+
+## Lua Parser API (Legacy)
+
+> [!NOTE]
+> These functions are easier to use but involve string allocations and overhead. For high-speed data, use the FFI approach above.
 
 ### Buffer Parsing Functions
 
@@ -634,10 +673,14 @@ scripts/parsers/
 | `getBufferLength(buf)` | Get buffer size | `number` |
 | `getBufferByte(buf, idx)` | Get single byte | `0-255` or `nil` |
 | `bytesToHex(buf, off, len)` | Hex dump for debugging | `string` or `nil` |
-| `update_signal(name, time, val)` | Update signal | `void` |
+| `get_signal_id(name)` | Get O(1) ID for signal | `number` |
+| `update_signal_fast(id, time, val)` | Update signal via ID | `void` |
+| `update_signal(name, time, val)` | Update signal (string) | `void` |
 | `create_signal(name)` | Pre-create signal | `void` |
 | `trigger_packet_callbacks(type)` | Trigger Tier 1 transforms | `void` |
 | `register_parser(name, func)` | Register parser | `void` |
+| `parse_packet_ptr(ptr, len)` | Trigger ptr parsers | `bool` |
+| `SharedBuffer.new(size)` | Create shared buffer | `SharedBuffer` |
 
 ---
 
