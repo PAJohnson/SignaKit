@@ -335,6 +335,11 @@ local function init_signal_cache()
     cache_signal("State.cpuUsage"); cache_signal("State.memoryUsage")
     cache_signal("State.boardTemperature")
 
+    -- Debug
+    cache_signal("Debug.time")
+    cache_signal("Debug.counter"); cache_signal("Debug.value1"); cache_signal("Debug.value2")
+    cache_signal("Debug.metric"); cache_signal("Debug.stackDepth")
+
     -- Motor
     cache_signal("Motor.time")
     cache_signal("Motor.rpm"); cache_signal("Motor.torque"); cache_signal("Motor.power")
@@ -358,13 +363,14 @@ register_parser("fast_binary", function(raw_ptr, len)
     -- Read header (first 3 bytes)
     local header = ffi.string(ptr, 3)
 
-    -- === IMU Handing ===
+    -- === IMU Handling ===
     if header == "IMU" and len >= ffi.sizeof("struct IMUData") then
         local packet = ffi.cast("struct IMUData*", ptr)
         local t = packet.time
+        local accelX = packet.accelX
 
         update_signal_fast(sigs["IMU.time"], t, t)
-        update_signal_fast(sigs["IMU.accelX"], t, packet.accelX)
+        update_signal_fast(sigs["IMU.accelX"], t, accelX)
         update_signal_fast(sigs["IMU.accelY"], t, packet.accelY)
         update_signal_fast(sigs["IMU.accelZ"], t, packet.accelZ)
         update_signal_fast(sigs["IMU.gyroX"], t, packet.gyroX)
@@ -375,7 +381,6 @@ register_parser("fast_binary", function(raw_ptr, len)
         update_signal_fast(sigs["IMU.magZ"], t, packet.magZ)
         update_signal_fast(sigs["IMU.temperature"], t, packet.temperature)
         
-        -- Trigger callbacks
         trigger_packet_callbacks("IMU", t)
         return true
     end
@@ -412,6 +417,48 @@ register_parser("fast_binary", function(raw_ptr, len)
         return true
     end
 
+    -- === LIDAR Handling ===
+    if header == "LID" and len >= ffi.sizeof("struct LIDARData") then
+        local packet = ffi.cast("struct LIDARData*", ptr)
+        local t = packet.time
+
+        update_signal_fast(sigs["LIDAR.time"], t, t)
+        update_signal_fast(sigs["LIDAR.range"], t, packet.range)
+        update_signal_fast(sigs["LIDAR.intensity"], t, packet.intensity)
+        update_signal_fast(sigs["LIDAR.numTracks"], t, packet.numTracks)
+        
+        for i=0,packet.numTracks-1 do
+            if i < 32 then
+                update_signal_fast(sigs["LIDAR.tracks["..i.."].range"], t, packet.tracks[i].range)
+                update_signal_fast(sigs["LIDAR.tracks["..i.."].velocity"], t, packet.tracks[i].velocity)
+            end
+        end
+
+        trigger_packet_callbacks("LIDAR", t)
+        return true
+    end
+
+    -- === RADAR Handling ===
+    if header == "RAD" and len >= ffi.sizeof("struct RADARData") then
+        local packet = ffi.cast("struct RADARData*", ptr)
+        local t = packet.time
+
+        update_signal_fast(sigs["RADAR.time"], t, t)
+        update_signal_fast(sigs["RADAR.range"], t, packet.range)
+        update_signal_fast(sigs["RADAR.velocity"], t, packet.velocity)
+        update_signal_fast(sigs["RADAR.targetCount"], t, packet.targetCount)
+        
+        for i=0,packet.targetCount-1 do
+            if i < 24 then
+                update_signal_fast(sigs["RADAR.tracks["..i.."].range"], t, packet.tracks[i].range)
+                update_signal_fast(sigs["RADAR.tracks["..i.."].velocity"], t, packet.tracks[i].velocity)
+            end
+        end
+
+        trigger_packet_callbacks("RADAR", t)
+        return true
+    end
+
     -- === Motor Handling ===
     if header == "MTR" and len >= ffi.sizeof("struct MotorData") then
         local packet = ffi.cast("struct MotorData*", ptr)
@@ -441,6 +488,22 @@ register_parser("fast_binary", function(raw_ptr, len)
         update_signal_fast(sigs["State.boardTemperature"], t, packet.boardTemperature)
 
         trigger_packet_callbacks("State", t)
+        return true
+    end
+
+    -- === Debug Handling ===
+    if header == "DBG" and len >= ffi.sizeof("struct DebugData") then
+        local packet = ffi.cast("struct DebugData*", ptr)
+        local t = packet.time
+
+        update_signal_fast(sigs["Debug.time"], t, t)
+        update_signal_fast(sigs["Debug.counter"], t, tonumber(packet.counter))
+        update_signal_fast(sigs["Debug.value1"], t, packet.value1)
+        update_signal_fast(sigs["Debug.value2"], t, packet.value2)
+        update_signal_fast(sigs["Debug.metric"], t, packet.metric)
+        update_signal_fast(sigs["Debug.stackDepth"], t, packet.stackDepth)
+
+        trigger_packet_callbacks("Debug", t)
         return true
     end
 
