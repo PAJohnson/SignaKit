@@ -12,8 +12,7 @@ inline void SetupWindowPositionAndSize(WindowType& window,
                                         const ImVec2& defaultPos,
                                         const ImVec2& defaultSize);
 
-template<typename WindowType>
-inline void CaptureWindowPositionAndSize(WindowType& window);
+
 
 // -------------------------------------------------------------------------
 // EDITABLE TEXT RENDERING HELPER
@@ -160,8 +159,7 @@ inline void RenderButtonControls(UIPlotState& uiPlotState, float menuBarHeight) 
       button.wasClickedLastFrame = true;
     }
 
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(button);
+
 
     ImGui::End();
   }
@@ -252,8 +250,7 @@ inline void RenderToggleControls(UIPlotState& uiPlotState, float menuBarHeight) 
     ImGui::SetCursorPosY(togglePosY);
     ImGui::Checkbox(checkboxLabel.c_str(), &toggle.state);
 
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(toggle);
+
 
     ImGui::End();
   }
@@ -326,8 +323,7 @@ inline void RenderTextInputControls(UIPlotState& uiPlotState, float menuBarHeigh
     // Show hint
     ImGui::TextDisabled("Press Enter to submit");
 
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(textInput);
+
 
     ImGui::End();
   }

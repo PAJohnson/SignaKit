@@ -56,6 +56,10 @@ struct UIPlotState {
   std::unordered_set<std::string> activeSignals;
   std::mutex activeSignalsMutex;
 
+  // Pending action requests (handled in main loop before NewFrame)
+  std::string pendingLoadFilename;
+  bool managedByImGui = false;
+  
   void refreshActiveSignals() {
       std::lock_guard<std::mutex> lock(activeSignalsMutex);
       activeSignals.clear();

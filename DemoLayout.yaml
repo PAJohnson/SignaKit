@@ -1,4 +1,1081 @@
 editMode: false
+imgui_settings: |
+  [Window][Debug##Default]
+  Pos=60,60
+  Size=400,400
+  Collapsed=0
+
+  [Window][Signal Browser]
+  Pos=2,36
+  Size=380,1066
+  Collapsed=0
+  DockId=0x00000017,0
+
+  [Window][Main Plot]
+  Pos=303,5
+  Size=534,719
+  Collapsed=0
+  DockId=0x00000004,0
+
+  [Window][Plot 1]
+  Pos=1567,223
+  Size=759,597
+  Collapsed=0
+  DockId=0x0000003F,0
+
+  [Window][Plot 2]
+  Pos=218,39
+  Size=674,347
+  Collapsed=0
+
+  [Window][Plot 3]
+  Pos=938,36
+  Size=372,360
+  Collapsed=0
+  DockId=0x00000005,0
+
+  [Window][Plot 4]
+  Pos=1312,36
+  Size=268,360
+  Collapsed=0
+  DockId=0x00000009,0
+
+  [Window][Open Layout##OpenLayoutDlg]
+  Pos=60,60
+  Size=1130,600
+  Collapsed=0
+
+  [Window][Readout 1]
+  Pos=350,50
+  Size=300,150
+  Collapsed=0
+
+  [Window][Battery.current]
+  Pos=304,33
+  Size=194,171
+  Collapsed=0
+
+  [Window][Debug.eventID]
+  Pos=350,50
+  Size=300,150
+  Collapsed=0
+
+  [Window][Debug.subsystem]
+  Pos=744,228
+  Size=300,150
+  Collapsed=0
+
+  [Window][Battery.voltage]
+  Pos=300,417
+  Size=300,150
+  Collapsed=0
+
+  [Window][Readout 1##Readout1]
+  Pos=388,384
+  Size=331,306
+  Collapsed=0
+
+  [Window][Debug.eventID##Readout1]
+  Pos=331,309
+  Size=300,150
+  Collapsed=0
+
+  [Window][Debug.metric##Readout1]
+  Pos=350,50
+  Size=300,150
+  Collapsed=0
+
+  [Window][GPS.altitude##Readout1]
+  Pos=350,50
+  Size=300,150
+  Collapsed=0
+
+  [Window][Battery.temperature##Readout1]
+  Pos=316,192
+  Size=964,394
+  Collapsed=0
+  DockId=0x00000004,2
+
+  [Window][Save Layout##SaveLayoutDlg]
+  Pos=60,60
+  Size=800,600
+  Collapsed=0
+
+  [Window][GPS.longitude##Readout1]
+  Pos=344,518
+  Size=311,138
+  Collapsed=0
+
+  [Window][Readout 2##Readout2]
+  Pos=350,50
+  Size=300,150
+  Collapsed=0
+
+  [Window][Debug.priority##Readout2]
+  Pos=347,50
+  Size=158,152
+  Collapsed=0
+
+  [Window][Battery.voltage##Readout2]
+  Pos=1270,33
+  Size=211,118
+  Collapsed=0
+
+  [Window][X/Y Plot 1]
+  Pos=1023,825
+  Size=542,587
+  Collapsed=0
+  DockId=0x0000003D,0
+
+  [Window][Battery.cycleCount##Readout1]
+  Pos=305,401
+  Size=300,150
+  Collapsed=0
+
+  [Window][Open Log File##OpenLogFileDlg]
+  Pos=60,60
+  Size=800,600
+  Collapsed=0
+
+  [Window][Time Control]
+  Pos=0,820
+  Size=1600,80
+  Collapsed=0
+
+  [Window][Histogram 1##Histogram1]
+  Pos=860,137
+  Size=600,400
+  Collapsed=0
+
+  [Window][IMU.accelX##Histogram1]
+  Pos=350,50
+  Size=600,400
+  Collapsed=0
+
+  [Window][Histogram 2##Histogram2]
+  Pos=964,50
+  Size=600,400
+  Collapsed=0
+
+  [Window][IMU.gyroX##Histogram2]
+  Pos=958,54
+  Size=600,400
+  Collapsed=0
+
+  [Window][FFT 1##FFT1]
+  Pos=1575,287
+  Size=800,600
+  Collapsed=0
+
+  [Window][IMU.accelX FFT##FFT1]
+  Pos=894,39
+  Size=411,346
+  Collapsed=0
+
+  [Window][IMU.gyroY FFT##FFT1]
+  Pos=350,50
+  Size=800,600
+  Collapsed=0
+
+  [Window][IMU.accelY FFT##FFT1]
+  Pos=350,50
+  Size=800,600
+  Collapsed=0
+
+  [Window][IMU.gyroX FFT##FFT1]
+  Pos=755,48
+  Size=800,600
+  Collapsed=0
+
+  [Window][FFT 2##FFT2]
+  Pos=350,50
+  Size=800,600
+  Collapsed=0
+
+  [Window][IMU.accelY FFT##FFT2]
+  Pos=350,50
+  Size=800,600
+  Collapsed=0
+
+  [Window][Spectrogram 1##Spectrogram1]
+  Pos=1469,602
+  Size=816,515
+  Collapsed=0
+
+  [Window][IMU.accelX Spectrogram##Spectrogram1]
+  Pos=2328,814
+  Size=755,598
+  Collapsed=0
+  DockId=0x00000035,0
+
+  [Window][IMU.accelY Spectrogram##Spectrogram1]
+  Pos=350,50
+  Size=900,600
+  Collapsed=0
+
+  [Window][Load Lua Script##LoadScriptDlg]
+  Pos=60,60
+  Size=800,600
+  Collapsed=0
+
+  [Window][IMU.accelX_filtered Spectrogram##Spectrogram1]
+  Pos=1469,602
+  Size=816,515
+  Collapsed=0
+
+  [Window][IMU.accelX_filtered FFT##FFT1]
+  Pos=2328,223
+  Size=755,589
+  Collapsed=0
+  DockId=0x00000002,0
+
+  [Window][IMU.accelMagnitude Spectrogram##Spectrogram1]
+  Pos=690,253
+  Size=900,600
+  Collapsed=0
+
+  [Window][Debug.priority##Readout1]
+  Pos=1979,32
+  Size=650,390
+  Collapsed=0
+
+  [Window][IMU.accelX_filtered##Histogram1]
+  Pos=1567,822
+  Size=759,590
+  Collapsed=0
+  DockId=0x00000040,0
+
+  [Window][Button 1##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][Abort##Button1]
+  Pos=337,218
+  Size=291,309
+  Collapsed=0
+
+  [Window][Toggle 1##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][Text Input 1##TextInput1]
+  Pos=1206,164
+  Size=315,196
+  Collapsed=0
+
+  [Window][Button ##Button1]
+  Pos=337,218
+  Size=291,309
+  Collapsed=0
+
+  [Window][Button a##Button1]
+  Pos=337,218
+  Size=291,309
+  Collapsed=0
+
+  [Window][Button ab##Button1]
+  Pos=337,218
+  Size=291,309
+  Collapsed=0
+
+  [Window][Button abc##Button1]
+  Pos=337,218
+  Size=291,309
+  Collapsed=0
+
+  [Window][Button abcs##Button1]
+  Pos=457,160
+  Size=291,309
+  Collapsed=0
+
+  [Window][Button abcs7##Button1]
+  Pos=457,160
+  Size=291,309
+  Collapsed=0
+
+  [Window][##Button1]
+  Pos=457,160
+  Size=291,309
+  Collapsed=0
+
+  [Window][B##Button1]
+  Pos=457,160
+  Size=291,309
+  Collapsed=0
+
+  [Window][X/Y Plot 2]
+  Pos=1307,39
+  Size=277,346
+  Collapsed=0
+
+  [Window][Text Input 2##TextInput2]
+  Pos=899,659
+  Size=315,389
+  Collapsed=0
+
+  [Window][U##TextInput1]
+  Pos=1206,164
+  Size=315,196
+  Collapsed=0
+
+  [Window][UD##TextInput1]
+  Pos=1206,164
+  Size=315,196
+  Collapsed=0
+
+  [Window][UDP##TextInput1]
+  Pos=1206,164
+  Size=315,196
+  Collapsed=0
+
+  [Window][UDP ##TextInput1]
+  Pos=1206,164
+  Size=315,196
+  Collapsed=0
+
+  [Window][UDP I##TextInput1]
+  Pos=1206,164
+  Size=315,196
+  Collapsed=0
+
+  [Window][UDP IP##TextInput1]
+  Pos=1023,223
+  Size=542,105
+  Collapsed=0
+  DockId=0x0000000B,0
+
+  [Window][U##TextInput2]
+  Pos=899,659
+  Size=315,389
+  Collapsed=0
+
+  [Window][UD##TextInput2]
+  Pos=899,659
+  Size=315,389
+  Collapsed=0
+
+  [Window][UDP##TextInput2]
+  Pos=899,659
+  Size=315,389
+  Collapsed=0
+
+  [Window][UDP ##TextInput2]
+  Pos=899,659
+  Size=315,389
+  Collapsed=0
+
+  [Window][UDP P##TextInput2]
+  Pos=899,659
+  Size=315,389
+  Collapsed=0
+
+  [Window][UDP Po##TextInput2]
+  Pos=899,659
+  Size=315,389
+  Collapsed=0
+
+  [Window][UDP Por##TextInput2]
+  Pos=899,659
+  Size=315,389
+  Collapsed=0
+
+  [Window][UDP Port##TextInput2]
+  Pos=1023,330
+  Size=542,126
+  Collapsed=0
+  DockId=0x0000000D,0
+
+  [Window][U##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UD##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP ##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP C##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP Co##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP Con##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP Conn##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP Conne##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP Connec##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][UDP Connect##Button1]
+  Pos=1206,418
+  Size=314,246
+  Collapsed=0
+
+  [Window][##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][U##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UD##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP ##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP C##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP Co##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP Con##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP Conn##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP Conne##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP Connec##Toggle1]
+  Pos=1823,515
+  Size=265,178
+  Collapsed=0
+
+  [Window][UDP Connect##Toggle1]
+  Pos=1023,458
+  Size=266,200
+  Collapsed=0
+  DockId=0x00000037,0
+
+  [Window][Toggle 2##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][O##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][On##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Onl##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Onli##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Onlin##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Online##Toggle2]
+  Pos=1291,458
+  Size=274,200
+  Collapsed=0
+  DockId=0x00000038,0
+
+  [Window][Spectrogram 2##Spectrogram2]
+  Pos=2184,1032
+  Size=900,600
+  Collapsed=0
+
+  [Window][Online/##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Online ##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Online M##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Online Mo##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Online Mod##Toggle2]
+  Pos=2172,592
+  Size=529,178
+  Collapsed=0
+
+  [Window][Online Mode##Toggle2]
+  Pos=1762,520
+  Size=200,211
+  Collapsed=0
+
+  [Window][IMU.accelX Spectrogram##Spectrogram2]
+  Pos=894,387
+  Size=411,344
+  Collapsed=0
+
+  [Window][Battery.current##Readout1]
+  Pos=1023,660
+  Size=542,163
+  Collapsed=0
+  DockId=0x0000003B,0
+
+  [Window][w##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][wh##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][wha##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][what##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][whats##Button1]
+  Pos=1262,495
+  Size=315,687
+  Collapsed=0
+
+  [Window][Load File##Button1]
+  Pos=1924,256
+  Size=299,1189
+  Collapsed=0
+  DockId=0x00000036,0
+
+  [Window][Open Log File##OfflineLogFileDlg]
+  Pos=60,60
+  Size=800,600
+  Collapsed=0
+
+  [Window][Memory Profiler]
+  Pos=60,60
+  Size=705,1632
+  Collapsed=0
+
+  [Table][0x9ABC605F,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x98081264,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x073CA156,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xB023C719,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xFD40EB53,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xBB6E4B61,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x999928A2,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x3E83DC7A,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xFF52BBBF,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xD905F53F,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x18D492FA,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xFB8E9588,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x1D002B03,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x998EB975,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x8E5453D3,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x7F34C778,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x418E2127,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xB0EEB58C,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x8B7EB00B,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x4AAFD7CE,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x8522DBCF,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x700EBC9E,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x33135567,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xE073031E,4]
+  RefScale=20
+  Column 3  Sort=0^
+
+  [Table][0x41FE0E9C,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x0BA4B616,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x0ADCF33C,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x7FB3C225,4]
+  RefScale=20
+  Column 3  Sort=0^
+
+  [Table][0xECA3F150,4]
+  RefScale=20
+  Column 3  Sort=0^
+
+  [Table][0xAC8AF441,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x5DEA60EA,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x0665E039,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xC7B487FC,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xD1F13314,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x102054D1,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xE6992663,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x17F9B2C8,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x0CD4434C,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xFDB4D7E7,4]
+  RefScale=20
+  Column 3  Sort=0^
+
+  [Table][0x5E32A026,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xAF52348D,4]
+  RefScale=20
+  Column 3  Sort=0^
+
+  [Table][0xF837FC02,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xE97A5B05,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xFFDFE3B5,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x0EBF771E,4]
+  RefScale=20
+  Column 3  Sort=0^
+
+  [Table][0x14CCB4A3,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x85DAE694,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xE9B8F478,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x271A449B,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xE6CB235E,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x38202268,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x9C6AB5D0,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xF1824469,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x305323AC,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x4EF4ACD7,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xD449D1BB,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x3F376FEB,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xE93CB0AA,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x46AE0A2A,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x20561AA0,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x30B4CD9C,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x7DD7DD73,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x32DBEF16,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xF5894395,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xCAFF1517,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xB8E89A2F,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xCD3C848F,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x4C76E403,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x8DA783C6,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xDA098184,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x1BD8E641,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xDBF2F935,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x3805C6E7,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x1A239EF0,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x84FD8E32,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x670AB1E0,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xF6C6F2C2,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x3D09C260,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x165794F1,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x1854AA18,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x40374578,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x9A669861,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xDA42F529,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x0A4DDCA0,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x6101281F,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x632EB071,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xAF3DC24F,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xB61C8A84,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x8EF33CE0,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x49B28954,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x2B8A7EC5,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x7C781E24,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xBDA979E1,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0xCD5154AD,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Table][0x0C803368,4]
+  RefScale=20
+  Column 0  Sort=0v
+
+  [Docking][Data]
+  DockNode              ID=0x00000001 Pos=305,428 Size=964,360 Split=X
+    DockNode            ID=0x00000008 Parent=0x00000001 SizeRef=929,719 Split=X
+      DockNode          ID=0x00000004 Parent=0x00000008 SizeRef=266,719
+      DockNode          ID=0x00000005 Parent=0x00000008 SizeRef=310,719 Selected=0x569D2C89
+    DockNode            ID=0x00000009 Parent=0x00000001 SizeRef=359,719 Selected=0xFEEB22CD
+  DockNode              ID=0x00000016 Pos=2,36 Size=380,1066 Split=X
+    DockNode            ID=0x00000034 Parent=0x00000016 SizeRef=210,692 Split=X
+      DockNode          ID=0x00000023 Parent=0x00000034 SizeRef=824,720 Split=X
+        DockNode        ID=0x00000017 Parent=0x00000023 SizeRef=246,720 Selected=0x902F1367
+        DockNode        ID=0x00000018 Parent=0x00000023 SizeRef=576,720 Selected=0x26BFF3D1
+      DockNode          ID=0x00000019 Parent=0x00000034 SizeRef=1801,720 Split=X
+        DockNode        ID=0x00000022 Parent=0x00000019 SizeRef=1149,721 Split=X
+          DockNode      ID=0x0000001F Parent=0x00000022 SizeRef=799,721 Split=Y
+            DockNode    ID=0x0000001A Parent=0x0000001F SizeRef=783,192 Selected=0x6B479568
+            DockNode    ID=0x0000001B Parent=0x0000001F SizeRef=783,189 Selected=0xDADBED4D
+          DockNode      ID=0x0000001C Parent=0x00000022 SizeRef=348,721 Split=Y
+            DockNode    ID=0x0000001D Parent=0x0000001C SizeRef=497,159 Selected=0x695DFEC1
+            DockNode    ID=0x0000001E Parent=0x0000001C SizeRef=497,156 Selected=0x5164FE87
+        DockNode        ID=0x00000020 Parent=0x00000019 SizeRef=650,721 Split=Y
+          DockNode      ID=0x00000021 Parent=0x00000020 SizeRef=300,75 Selected=0xD0C048A8
+          DockNode      ID=0x00000012 Parent=0x00000020 SizeRef=300,73 Split=Y
+            DockNode    ID=0x00000015 Parent=0x00000012 SizeRef=620,154 Split=Y Selected=0xFFC0ABE4
+              DockNode  ID=0x00000013 Parent=0x00000015 SizeRef=620,125 Selected=0x187E1872
+              DockNode  ID=0x00000014 Parent=0x00000015 SizeRef=620,129 Selected=0xFFC0ABE4
+            DockNode    ID=0x0000000F Parent=0x00000012 SizeRef=620,151 Split=X
+              DockNode  ID=0x00000010 Parent=0x0000000F SizeRef=153,309 Selected=0x73C783D6
+              DockNode  ID=0x00000011 Parent=0x0000000F SizeRef=158,309 Selected=0xD6E56A7C
+    DockNode            ID=0x00000028 Parent=0x00000016 SizeRef=1686,692 Split=X
+      DockNode          ID=0x00000033 Parent=0x00000028 SizeRef=1338,803 Split=X
+        DockNode        ID=0x00000032 Parent=0x00000033 SizeRef=1087,803 Split=X
+          DockNode      ID=0x0000002E Parent=0x00000032 SizeRef=674,803 Split=Y
+            DockNode    ID=0x00000029 Parent=0x0000002E SizeRef=964,180 Selected=0x6E8C4325
+            DockNode    ID=0x0000002A Parent=0x0000002E SizeRef=964,178 Selected=0x5164FE87
+          DockNode      ID=0x0000002B Parent=0x00000032 SizeRef=411,803 Split=Y
+            DockNode    ID=0x0000002C Parent=0x0000002B SizeRef=800,300 Selected=0xDADBED4D
+            DockNode    ID=0x0000002D Parent=0x0000002B SizeRef=800,298 Selected=0x6FA05CAE
+        DockNode        ID=0x0000002F Parent=0x00000033 SizeRef=277,803 Split=Y
+          DockNode      ID=0x00000030 Parent=0x0000002F SizeRef=800,300 Selected=0x216E4E35
+          DockNode      ID=0x00000031 Parent=0x0000002F SizeRef=800,298 Selected=0x4E96C3FE
+      DockNode          ID=0x00000003 Parent=0x00000028 SizeRef=346,803 Split=Y
+        DockNode        ID=0x00000027 Parent=0x00000003 SizeRef=315,464 Split=Y
+          DockNode      ID=0x00000007 Parent=0x00000027 SizeRef=315,113 Selected=0x187E1872
+          DockNode      ID=0x0000000A Parent=0x00000027 SizeRef=315,100 Selected=0xFFC0ABE4
+        DockNode        ID=0x00000024 Parent=0x00000003 SizeRef=315,204 Split=X
+          DockNode      ID=0x00000025 Parent=0x00000024 SizeRef=261,178 Selected=0x73C783D6
+          DockNode      ID=0x00000026 Parent=0x00000024 SizeRef=266,178 Selected=0xEBC439E7
+  DockNode              ID=0x0000003E Pos=1023,223 Size=2060,1189 Split=X
+    DockNode            ID=0x00000006 Parent=0x0000003E SizeRef=542,1189 Split=Y
+      DockNode          ID=0x0000003C Parent=0x00000006 SizeRef=927,137 Split=Y
+        DockNode        ID=0x0000003A Parent=0x0000003C SizeRef=927,471 Split=Y
+          DockNode      ID=0x00000039 Parent=0x0000003A SizeRef=927,252 Split=Y
+            DockNode    ID=0x0000000B Parent=0x00000039 SizeRef=927,114 Selected=0x187E1872
+            DockNode    ID=0x0000000D Parent=0x00000039 SizeRef=927,136 Selected=0xFFC0ABE4
+          DockNode      ID=0x0000000E Parent=0x0000003A SizeRef=927,217 Split=X
+            DockNode    ID=0x00000037 Parent=0x0000000E SizeRef=266,406 Selected=0x73C783D6
+            DockNode    ID=0x00000038 Parent=0x0000000E SizeRef=275,406 Selected=0xD6E56A7C
+        DockNode        ID=0x0000003B Parent=0x0000003C SizeRef=927,176 Selected=0x4E96C3FE
+      DockNode          ID=0x0000003D Parent=0x00000006 SizeRef=927,134 Selected=0x695DFEC1
+    DockNode            ID=0x00000042 Parent=0x0000003E SizeRef=1516,1189 Split=X
+      DockNode          ID=0x00000041 Parent=0x00000042 SizeRef=503,533 Split=Y
+        DockNode        ID=0x0000003F Parent=0x00000041 SizeRef=1005,267 Selected=0x26BFF3D1
+        DockNode        ID=0x00000040 Parent=0x00000041 SizeRef=1005,264 Selected=0x5164FE87
+      DockNode          ID=0x0000000C Parent=0x00000042 SizeRef=500,533 Split=X
+        DockNode        ID=0x00000036 Parent=0x0000000C SizeRef=927,1076 Selected=0x4F1C42C6
+        DockNode        ID=0x00000043 Parent=0x0000000C SizeRef=1410,1076 Split=Y
+          DockNode      ID=0x00000002 Parent=0x00000043 SizeRef=2002,259 Selected=0xEE792ED3
+          DockNode      ID=0x00000035 Parent=0x00000043 SizeRef=2002,263 Selected=0x2793EC5A
+
+
 plots:
   - id: 1
     title: Plot 1
@@ -6,37 +1083,37 @@ plots:
     signals:
       - IMU.accelX
       - IMU.accelX_filtered
-    posX: 720
-    posY: 41
-    sizeX: 741
-    sizeY: 560
+    posX: 1567
+    posY: 223
+    sizeX: 759
+    sizeY: 597
 readouts:
   - id: 1
     title: Battery.current
     signal: Battery.current
-    posX: 388
-    posY: 384
-    sizeX: 331
-    sizeY: 306
+    posX: 1023
+    posY: 660
+    sizeX: 542
+    sizeY: 163
 xyplots:
   - id: 1
     title: X/Y Plot 1
     paused: false
     xSignal: IMU.accelY
     ySignal: IMU.accelZ
-    posX: 388
-    posY: 695
-    sizeX: 329
-    sizeY: 420
+    posX: 1023
+    posY: 825
+    sizeX: 542
+    sizeY: 587
 histograms:
   - id: 1
     title: IMU.accelX_filtered
     signal: IMU.accelX_filtered
     numBins: 50
-    posX: 724
-    posY: 598
-    sizeX: 737
-    sizeY: 515
+    posX: 1567
+    posY: 822
+    sizeX: 759
+    sizeY: 590
 ffts:
   - id: 1
     title: IMU.accelX_filtered FFT
@@ -44,10 +1121,10 @@ ffts:
     fftSize: 1024
     useHanning: true
     logScale: false
-    posX: 1467
-    posY: 41
-    sizeX: 814
-    sizeY: 558
+    posX: 2328
+    posY: 223
+    sizeX: 755
+    sizeY: 589
 spectrograms:
   - id: 1
     title: IMU.accelX Spectrogram
@@ -58,41 +1135,41 @@ spectrograms:
     logScale: false
     timeWindow: 5
     maxFrequency: 0
-    posX: 1469
-    posY: 602
-    sizeX: 816
-    sizeY: 515
+    posX: 2328
+    posY: 814
+    sizeX: 755
+    sizeY: 598
 buttons:
   []
 toggles:
   - id: 1
     title: UDP Connect
     toggleLabel: Enable
-    state: true
-    posX: 384
-    posY: 254
-    sizeX: 167
-    sizeY: 123
+    state: false
+    posX: 1023
+    posY: 458
+    sizeX: 266
+    sizeY: 200
   - id: 2
     title: Online
     toggleLabel: Enable
-    state: false
-    posX: 553
-    posY: 254
-    sizeX: 164
-    sizeY: 123
+    state: true
+    posX: 1291
+    posY: 458
+    sizeX: 274
+    sizeY: 200
 textInputs:
   - id: 1
     title: UDP IP
     textBuffer: localhost
-    posX: 384
-    posY: 150
-    sizeX: 333
-    sizeY: 102
+    posX: 1023
+    posY: 223
+    sizeX: 542
+    sizeY: 105
   - id: 2
     title: UDP Port
     textBuffer: 5000
-    posX: 384
-    posY: 40
-    sizeX: 333
-    sizeY: 108
+    posX: 1023
+    posY: 330
+    sizeX: 542
+    sizeY: 126

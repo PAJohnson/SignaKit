@@ -14,9 +14,34 @@
 #include <string>
 #include <vector>
 #include <yaml-cpp/yaml.h>
+#include "imgui.h"
 
 // Forward declarations (these are defined in main.cpp)
 struct OfflinePlaybackState;
+
+// Data structure to hold loaded layout before applying to global state
+struct LayoutData {
+    std::vector<PlotWindow> plots;
+    int nextPlotId = 1;
+    std::vector<ReadoutBox> readouts;
+    int nextReadoutId = 1;
+    std::vector<XYPlotWindow> xyPlots;
+    int nextXYPlotId = 1;
+    std::vector<HistogramWindow> histograms;
+    int nextHistogramId = 1;
+    std::vector<FFTWindow> ffts;
+    int nextFFTId = 1;
+    std::vector<SpectrogramWindow> spectrograms;
+    int nextSpectrogramId = 1;
+    std::vector<ButtonControl> buttons;
+    int nextButtonId = 1;
+    std::vector<ToggleControl> toggles;
+    int nextToggleId = 1;
+    std::vector<TextInputControl> textInputs;
+    int nextTextInputId = 1;
+    bool editMode = true;
+    std::string imguiSettings;
+};
 
 // -------------------------------------------------------------------------
 // LOG FILE UTILITIES
@@ -64,6 +89,14 @@ inline bool SaveLayout(const std::string &filename,
     // Save UI settings
     out << YAML::Key << "editMode" << YAML::Value << editMode;
 
+    // Save ImGui Settings (Docking, Window Layout, etc.)
+    size_t settingsSize = 0;
+    const char* settingsData = ImGui::SaveIniSettingsToMemory(&settingsSize);
+    if (settingsData && settingsSize > 0) {
+        std::string settingsStr(settingsData, settingsSize);
+        out << YAML::Key << "imgui_settings" << YAML::Value << YAML::Literal << settingsStr;
+    }
+
     // Save plots
     out << YAML::Key << "plots" << YAML::Value << YAML::BeginSeq;
     for (const auto &plot : plots) {
@@ -76,15 +109,6 @@ inline bool SaveLayout(const std::string &filename,
         out << signal;
       }
       out << YAML::EndSeq;
-      // Save window position and size if set
-      if (plot.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << plot.posX;
-        out << YAML::Key << "posY" << YAML::Value << plot.posY;
-      }
-      if (plot.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << plot.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << plot.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -96,14 +120,6 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "id" << YAML::Value << readout.id;
       out << YAML::Key << "title" << YAML::Value << readout.title;
       out << YAML::Key << "signal" << YAML::Value << readout.signalName;
-      if (readout.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << readout.posX;
-        out << YAML::Key << "posY" << YAML::Value << readout.posY;
-      }
-      if (readout.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << readout.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << readout.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -117,14 +133,6 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "paused" << YAML::Value << xyPlot.paused;
       out << YAML::Key << "xSignal" << YAML::Value << xyPlot.xSignalName;
       out << YAML::Key << "ySignal" << YAML::Value << xyPlot.ySignalName;
-      if (xyPlot.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << xyPlot.posX;
-        out << YAML::Key << "posY" << YAML::Value << xyPlot.posY;
-      }
-      if (xyPlot.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << xyPlot.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << xyPlot.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -137,14 +145,6 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "title" << YAML::Value << histogram.title;
       out << YAML::Key << "signal" << YAML::Value << histogram.signalName;
       out << YAML::Key << "numBins" << YAML::Value << histogram.numBins;
-      if (histogram.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << histogram.posX;
-        out << YAML::Key << "posY" << YAML::Value << histogram.posY;
-      }
-      if (histogram.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << histogram.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << histogram.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -159,14 +159,6 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "fftSize" << YAML::Value << fft.fftSize;
       out << YAML::Key << "useHanning" << YAML::Value << fft.useHanning;
       out << YAML::Key << "logScale" << YAML::Value << fft.logScale;
-      if (fft.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << fft.posX;
-        out << YAML::Key << "posY" << YAML::Value << fft.posY;
-      }
-      if (fft.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << fft.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << fft.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -184,14 +176,6 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "logScale" << YAML::Value << spectrogram.logScale;
       out << YAML::Key << "timeWindow" << YAML::Value << spectrogram.timeWindow;
       out << YAML::Key << "maxFrequency" << YAML::Value << spectrogram.maxFrequency;
-      if (spectrogram.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << spectrogram.posX;
-        out << YAML::Key << "posY" << YAML::Value << spectrogram.posY;
-      }
-      if (spectrogram.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << spectrogram.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << spectrogram.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -203,14 +187,6 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "id" << YAML::Value << button.id;
       out << YAML::Key << "title" << YAML::Value << button.title;
       out << YAML::Key << "buttonLabel" << YAML::Value << button.buttonLabel;
-      if (button.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << button.posX;
-        out << YAML::Key << "posY" << YAML::Value << button.posY;
-      }
-      if (button.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << button.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << button.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -223,14 +199,6 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "title" << YAML::Value << toggle.title;
       out << YAML::Key << "toggleLabel" << YAML::Value << toggle.toggleLabel;
       out << YAML::Key << "state" << YAML::Value << toggle.state;
-      if (toggle.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << toggle.posX;
-        out << YAML::Key << "posY" << YAML::Value << toggle.posY;
-      }
-      if (toggle.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << toggle.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << toggle.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -242,14 +210,6 @@ inline bool SaveLayout(const std::string &filename,
       out << YAML::Key << "id" << YAML::Value << textInput.id;
       out << YAML::Key << "title" << YAML::Value << textInput.title;
       out << YAML::Key << "textBuffer" << YAML::Value << std::string(textInput.textBuffer);
-      if (textInput.posX >= 0.0f) {
-        out << YAML::Key << "posX" << YAML::Value << textInput.posX;
-        out << YAML::Key << "posY" << YAML::Value << textInput.posY;
-      }
-      if (textInput.sizeX >= 0.0f) {
-        out << YAML::Key << "sizeX" << YAML::Value << textInput.sizeX;
-        out << YAML::Key << "sizeY" << YAML::Value << textInput.sizeY;
-      }
       out << YAML::EndMap;
     }
     out << YAML::EndSeq;
@@ -272,17 +232,7 @@ inline bool SaveLayout(const std::string &filename,
   }
 }
 
-inline bool LoadLayout(const std::string &filename,
-                      std::vector<PlotWindow> &plots, int &nextPlotId,
-                      std::vector<ReadoutBox> &readouts, int &nextReadoutId,
-                      std::vector<XYPlotWindow> &xyPlots, int &nextXYPlotId,
-                      std::vector<HistogramWindow> &histograms, int &nextHistogramId,
-                      std::vector<FFTWindow> &ffts, int &nextFFTId,
-                      std::vector<SpectrogramWindow> &spectrograms, int &nextSpectrogramId,
-                      std::vector<ButtonControl> *buttons = nullptr, int *nextButtonId = nullptr,
-                      std::vector<ToggleControl> *toggles = nullptr, int *nextToggleId = nullptr,
-                      std::vector<TextInputControl> *textInputs = nullptr, int *nextTextInputId = nullptr,
-                      bool *editMode = nullptr) {
+inline bool LoadLayout(const std::string &filename, LayoutData& data) {
   try {
     YAML::Node config = YAML::LoadFile(filename);
     if (!config["plots"]) {
@@ -291,16 +241,17 @@ inline bool LoadLayout(const std::string &filename,
     }
 
     // Load UI settings
-    if (config["editMode"] && editMode != nullptr) {
-      *editMode = config["editMode"].as<bool>();
+    if (config["editMode"]) {
+      data.editMode = config["editMode"].as<bool>();
     }
 
-    std::vector<PlotWindow> loadedPlots;
-    std::vector<ReadoutBox> loadedReadouts;
-    std::vector<XYPlotWindow> loadedXYPlots;
-    std::vector<HistogramWindow> loadedHistograms;
-    std::vector<FFTWindow> loadedFFTs;
-    std::vector<SpectrogramWindow> loadedSpectrograms;
+    // Load ImGui Settings if present
+    bool hasImGuiSettings = false;
+    if (config["imgui_settings"]) {
+        data.imguiSettings = config["imgui_settings"].as<std::string>();
+        hasImGuiSettings = true;
+    }
+
     int maxPlotId = 0;
     int maxReadoutId = 0;
     int maxXYPlotId = 0;
@@ -322,17 +273,9 @@ inline bool LoadLayout(const std::string &filename,
         }
       }
 
-      // Load window position and size if present
-      if (plotNode["posX"]) {
-        plot.posX = plotNode["posX"].as<float>();
-        plot.posY = plotNode["posY"].as<float>();
-      }
-      if (plotNode["sizeX"]) {
-        plot.sizeX = plotNode["sizeX"].as<float>();
-        plot.sizeY = plotNode["sizeY"].as<float>();
-      }
 
-      loadedPlots.push_back(plot);
+
+      data.plots.push_back(plot);
       if (plot.id > maxPlotId) {
         maxPlotId = plot.id;
       }
@@ -347,16 +290,9 @@ inline bool LoadLayout(const std::string &filename,
         readout.signalName = readoutNode["signal"] ? readoutNode["signal"].as<std::string>() : "";
         readout.isOpen = true;
 
-        if (readoutNode["posX"]) {
-          readout.posX = readoutNode["posX"].as<float>();
-          readout.posY = readoutNode["posY"].as<float>();
-        }
-        if (readoutNode["sizeX"]) {
-          readout.sizeX = readoutNode["sizeX"].as<float>();
-          readout.sizeY = readoutNode["sizeY"].as<float>();
-        }
 
-        loadedReadouts.push_back(readout);
+
+        data.readouts.push_back(readout);
         if (readout.id > maxReadoutId) {
           maxReadoutId = readout.id;
         }
@@ -374,16 +310,9 @@ inline bool LoadLayout(const std::string &filename,
         xyPlot.ySignalName = xyPlotNode["ySignal"] ? xyPlotNode["ySignal"].as<std::string>() : "";
         xyPlot.isOpen = true;
 
-        if (xyPlotNode["posX"]) {
-          xyPlot.posX = xyPlotNode["posX"].as<float>();
-          xyPlot.posY = xyPlotNode["posY"].as<float>();
-        }
-        if (xyPlotNode["sizeX"]) {
-          xyPlot.sizeX = xyPlotNode["sizeX"].as<float>();
-          xyPlot.sizeY = xyPlotNode["sizeY"].as<float>();
-        }
 
-        loadedXYPlots.push_back(xyPlot);
+
+        data.xyPlots.push_back(xyPlot);
         if (xyPlot.id > maxXYPlotId) {
           maxXYPlotId = xyPlot.id;
         }
@@ -400,16 +329,9 @@ inline bool LoadLayout(const std::string &filename,
         histogram.numBins = histogramNode["numBins"] ? histogramNode["numBins"].as<int>() : 50;
         histogram.isOpen = true;
 
-        if (histogramNode["posX"]) {
-          histogram.posX = histogramNode["posX"].as<float>();
-          histogram.posY = histogramNode["posY"].as<float>();
-        }
-        if (histogramNode["sizeX"]) {
-          histogram.sizeX = histogramNode["sizeX"].as<float>();
-          histogram.sizeY = histogramNode["sizeY"].as<float>();
-        }
 
-        loadedHistograms.push_back(histogram);
+
+        data.histograms.push_back(histogram);
         if (histogram.id > maxHistogramId) {
           maxHistogramId = histogram.id;
         }
@@ -428,16 +350,9 @@ inline bool LoadLayout(const std::string &filename,
         fft.logScale = fftNode["logScale"] ? fftNode["logScale"].as<bool>() : true;
         fft.isOpen = true;
 
-        if (fftNode["posX"]) {
-          fft.posX = fftNode["posX"].as<float>();
-          fft.posY = fftNode["posY"].as<float>();
-        }
-        if (fftNode["sizeX"]) {
-          fft.sizeX = fftNode["sizeX"].as<float>();
-          fft.sizeY = fftNode["sizeY"].as<float>();
-        }
 
-        loadedFFTs.push_back(fft);
+
+        data.ffts.push_back(fft);
         if (fft.id > maxFFTId) {
           maxFFTId = fft.id;
         }
@@ -459,16 +374,9 @@ inline bool LoadLayout(const std::string &filename,
         spectrogram.maxFrequency = spectrogramNode["maxFrequency"] ? spectrogramNode["maxFrequency"].as<int>() : 0;
         spectrogram.isOpen = true;
 
-        if (spectrogramNode["posX"]) {
-          spectrogram.posX = spectrogramNode["posX"].as<float>();
-          spectrogram.posY = spectrogramNode["posY"].as<float>();
-        }
-        if (spectrogramNode["sizeX"]) {
-          spectrogram.sizeX = spectrogramNode["sizeX"].as<float>();
-          spectrogram.sizeY = spectrogramNode["sizeY"].as<float>();
-        }
 
-        loadedSpectrograms.push_back(spectrogram);
+
+        data.spectrograms.push_back(spectrogram);
         if (spectrogram.id > maxSpectrogramId) {
           maxSpectrogramId = spectrogram.id;
         }
@@ -476,9 +384,8 @@ inline bool LoadLayout(const std::string &filename,
     }
 
     // Load buttons (Tier 4, if present)
-    std::vector<ButtonControl> loadedButtons;
     int maxButtonId = 0;
-    if (config["buttons"] && buttons != nullptr && nextButtonId != nullptr) {
+    if (config["buttons"]) {
       for (const auto &buttonNode : config["buttons"]) {
         ButtonControl button;
         button.id = buttonNode["id"].as<int>();
@@ -486,16 +393,9 @@ inline bool LoadLayout(const std::string &filename,
         button.buttonLabel = buttonNode["buttonLabel"] ? buttonNode["buttonLabel"].as<std::string>() : "Click me!";
         button.isOpen = true;
 
-        if (buttonNode["posX"]) {
-          button.posX = buttonNode["posX"].as<float>();
-          button.posY = buttonNode["posY"].as<float>();
-        }
-        if (buttonNode["sizeX"]) {
-          button.sizeX = buttonNode["sizeX"].as<float>();
-          button.sizeY = buttonNode["sizeY"].as<float>();
-        }
 
-        loadedButtons.push_back(button);
+
+        data.buttons.push_back(button);
         if (button.id > maxButtonId) {
           maxButtonId = button.id;
         }
@@ -503,9 +403,8 @@ inline bool LoadLayout(const std::string &filename,
     }
 
     // Load toggles (Tier 4, if present)
-    std::vector<ToggleControl> loadedToggles;
     int maxToggleId = 0;
-    if (config["toggles"] && toggles != nullptr && nextToggleId != nullptr) {
+    if (config["toggles"]) {
       for (const auto &toggleNode : config["toggles"]) {
         ToggleControl toggle;
         toggle.id = toggleNode["id"].as<int>();
@@ -514,16 +413,9 @@ inline bool LoadLayout(const std::string &filename,
         toggle.state = toggleNode["state"] ? toggleNode["state"].as<bool>() : false;
         toggle.isOpen = true;
 
-        if (toggleNode["posX"]) {
-          toggle.posX = toggleNode["posX"].as<float>();
-          toggle.posY = toggleNode["posY"].as<float>();
-        }
-        if (toggleNode["sizeX"]) {
-          toggle.sizeX = toggleNode["sizeX"].as<float>();
-          toggle.sizeY = toggleNode["sizeY"].as<float>();
-        }
 
-        loadedToggles.push_back(toggle);
+
+        data.toggles.push_back(toggle);
         if (toggle.id > maxToggleId) {
           maxToggleId = toggle.id;
         }
@@ -531,9 +423,8 @@ inline bool LoadLayout(const std::string &filename,
     }
 
     // Load text inputs (Tier 4, if present)
-    std::vector<TextInputControl> loadedTextInputs;
     int maxTextInputId = 0;
-    if (config["textInputs"] && textInputs != nullptr && nextTextInputId != nullptr) {
+    if (config["textInputs"]) {
       for (const auto &textInputNode : config["textInputs"]) {
         TextInputControl textInput;
         textInput.id = textInputNode["id"].as<int>();
@@ -546,48 +437,24 @@ inline bool LoadLayout(const std::string &filename,
           textInput.textBuffer[sizeof(textInput.textBuffer) - 1] = '\0';
         }
 
-        if (textInputNode["posX"]) {
-          textInput.posX = textInputNode["posX"].as<float>();
-          textInput.posY = textInputNode["posY"].as<float>();
-        }
-        if (textInputNode["sizeX"]) {
-          textInput.sizeX = textInputNode["sizeX"].as<float>();
-          textInput.sizeY = textInputNode["sizeY"].as<float>();
-        }
 
-        loadedTextInputs.push_back(textInput);
+
+        data.textInputs.push_back(textInput);
         if (textInput.id > maxTextInputId) {
           maxTextInputId = textInput.id;
         }
       }
     }
 
-    plots = loadedPlots;
-    readouts = loadedReadouts;
-    xyPlots = loadedXYPlots;
-    histograms = loadedHistograms;
-    ffts = loadedFFTs;
-    spectrograms = loadedSpectrograms;
-    nextPlotId = maxPlotId + 1;
-    nextReadoutId = maxReadoutId + 1;
-    nextXYPlotId = maxXYPlotId + 1;
-    nextHistogramId = maxHistogramId + 1;
-    nextFFTId = maxFFTId + 1;
-    nextSpectrogramId = maxSpectrogramId + 1;
-
-    // Assign control elements if pointers are provided
-    if (buttons != nullptr && nextButtonId != nullptr) {
-      *buttons = loadedButtons;
-      *nextButtonId = maxButtonId + 1;
-    }
-    if (toggles != nullptr && nextToggleId != nullptr) {
-      *toggles = loadedToggles;
-      *nextToggleId = maxToggleId + 1;
-    }
-    if (textInputs != nullptr && nextTextInputId != nullptr) {
-      *textInputs = loadedTextInputs;
-      *nextTextInputId = maxTextInputId + 1;
-    }
+    data.nextPlotId = maxPlotId + 1;
+    data.nextReadoutId = maxReadoutId + 1;
+    data.nextXYPlotId = maxXYPlotId + 1;
+    data.nextHistogramId = maxHistogramId + 1;
+    data.nextFFTId = maxFFTId + 1;
+    data.nextSpectrogramId = maxSpectrogramId + 1;
+    data.nextButtonId = maxButtonId + 1;
+    data.nextToggleId = maxToggleId + 1;
+    data.nextTextInputId = maxTextInputId + 1;
 
     printf("Layout loaded from: %s\n", filename.c_str());
     return true;

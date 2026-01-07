@@ -51,48 +51,19 @@ void scanAvailableParsers(std::vector<std::string>& availableParsers) {
 // -------------------------------------------------------------------------
 
 // Helper function to set window position/size with clamping to screen bounds
-// Also uses saved position/size if available
+// Also uses saved position/size if available AND if useSavedPosition is true
+// Helper function to set default window position/size for first use
+// Actual position/size is handled by ImGui INI settings
 template<typename WindowType>
 inline void SetupWindowPositionAndSize(WindowType& window,
                                         const ImVec2& defaultPos,
                                         const ImVec2& defaultSize) {
-    ImGuiIO& io = ImGui::GetIO();
-    float screenWidth = io.DisplaySize.x;
-    float screenHeight = io.DisplaySize.y;
-
-    // If window has saved position, use it (with clamping) on first appearance only
-    if (window.posX >= 0.0f && window.posY >= 0.0f) {
-        // Clamp position to screen bounds
-        float clampedX = std::max(0.0f, std::min(window.posX, screenWidth - 100.0f));  // Keep at least 100px visible
-        float clampedY = std::max(0.0f, std::min(window.posY, screenHeight - 50.0f)); // Keep at least 50px visible
-        ImGui::SetNextWindowPos(ImVec2(clampedX, clampedY), ImGuiCond_Once);
-    } else {
-        ImGui::SetNextWindowPos(defaultPos, ImGuiCond_FirstUseEver);
-    }
-
-    // If window has saved size, use it (with minimum size enforcement) on first appearance only
-    if (window.sizeX >= 0.0f && window.sizeY >= 0.0f) {
-        // Enforce minimum sizes and clamp to screen
-        float minWidth = 200.0f;
-        float minHeight = 150.0f;
-        float clampedWidth = std::max(minWidth, std::min(window.sizeX, screenWidth));
-        float clampedHeight = std::max(minHeight, std::min(window.sizeY, screenHeight));
-        ImGui::SetNextWindowSize(ImVec2(clampedWidth, clampedHeight), ImGuiCond_Once);
-    } else {
-        ImGui::SetNextWindowSize(defaultSize, ImGuiCond_FirstUseEver);
-    }
+    ImGui::SetNextWindowPos(defaultPos, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(defaultSize, ImGuiCond_FirstUseEver);
 }
 
 // Helper function to capture current window position and size after rendering
-template<typename WindowType>
-inline void CaptureWindowPositionAndSize(WindowType& window) {
-    ImVec2 pos = ImGui::GetWindowPos();
-    ImVec2 size = ImGui::GetWindowSize();
-    window.posX = pos.x;
-    window.posY = pos.y;
-    window.sizeX = size.x;
-    window.sizeY = size.y;
-}
+
 
 // -------------------------------------------------------------------------
 // MENU BAR RENDERING
@@ -446,8 +417,7 @@ inline void RenderTimePlots(UIPlotState& uiPlotState, float menuBarHeight) {
       ImPlot::EndPlot();
     }
 
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(plot);
+
 
     ImGui::End();
   }
@@ -550,8 +520,7 @@ inline void RenderReadoutBoxes(UIPlotState& uiPlotState, float menuBarHeight) {
 
     ImGui::EndChild();
 
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(readout);
+
 
     ImGui::End();
   }
@@ -701,8 +670,7 @@ inline void RenderXYPlots(UIPlotState& uiPlotState, float menuBarHeight) {
       ImPlot::EndPlot();
     }
 
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(xyPlot);
+
 
     ImGui::End();
   }
@@ -819,8 +787,7 @@ inline void RenderHistograms(UIPlotState& uiPlotState, float menuBarHeight) {
       }
     }
 
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(histogram);
+
 
     ImGui::End();
   }
@@ -977,8 +944,7 @@ inline void RenderFFTPlots(UIPlotState& uiPlotState, float menuBarHeight) {
       }
     }
 
-    // Capture current window position and size
-    CaptureWindowPositionAndSize(fft);
+
 
     ImGui::End();
   }
@@ -1223,8 +1189,7 @@ inline void RenderSpectrograms(UIPlotState& uiPlotState, float menuBarHeight) {
         }
       }
 
-      // Capture current window position and size
-      CaptureWindowPositionAndSize(spectrogram);
+
       ImGui::End();
     }
 }
@@ -1311,9 +1276,7 @@ inline void RenderFileDialogs(UIPlotState& uiPlotState) {
   if (ImGuiFileDialog::Instance()->Display("OpenLayoutDlg", ImGuiWindowFlags_None, ImVec2(800, 600))) {
     if (ImGuiFileDialog::Instance()->IsOk()) {
       std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
-      if (LoadLayout(filePathName, uiPlotState.activePlots, uiPlotState.nextPlotId, uiPlotState.activeReadoutBoxes, uiPlotState.nextReadoutBoxId, uiPlotState.activeXYPlots, uiPlotState.nextXYPlotId, uiPlotState.activeHistograms, uiPlotState.nextHistogramId, uiPlotState.activeFFTs, uiPlotState.nextFFTId, uiPlotState.activeSpectrograms, uiPlotState.nextSpectrogramId, &uiPlotState.activeButtons, &uiPlotState.nextButtonId, &uiPlotState.activeToggles, &uiPlotState.nextToggleId, &uiPlotState.activeTextInputs, &uiPlotState.nextTextInputId, &uiPlotState.editMode)) {
-        // Layout loaded successfully
-      }
+      uiPlotState.pendingLoadFilename = filePathName;
     }
     ImGuiFileDialog::Instance()->Close();
   }

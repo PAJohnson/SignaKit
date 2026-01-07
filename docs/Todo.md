@@ -24,3 +24,42 @@ We must manually initialize the statically linked module so `require("socket")` 
 ### Verification
 - [ ] Create `scripts/test_socket.lua` to verify `require("socket")`.
 - [ ] Run app and check logs.
+
+## Interactive Lua Terminal
+
+### Goal
+Add a built-in terminal interface to the GUI that allows users to execute Lua commands interactively. This enables realtime debugging, variable inspection, and testing of new `on_packet` callbacks without restarting the application.
+
+### Implementation Plan
+
+#### 1. Core Logic (`src/LuaScriptManager.hpp`)
+Modify the script manager to handle console I/O and command execution.
+
+- [ ] Add `consoleOutput` buffer (vector of strings) and mutex for thread safety.
+- [ ] Intercept Lua `print` / logging to divert output to both stdout and the console buffer.
+- [ ] Implement `executeConsoleCommand(cmd)` to safely run Lua chunks from the UI.
+- [ ] Expose API for the UI to read logs and submit commands.
+
+#### 2. UI State (`src/ui_state.hpp`)
+Track the visibility of the new window.
+
+- [ ] Add `bool showLuaConsole` to `UIPlotState`.
+
+#### 3. Rendering (`src/console_rendering.hpp` & `src/plot_rendering.hpp`)
+Create the visual components for the terminal.
+
+- [ ] Create `src/console_rendering.hpp` with `RenderLuaConsole(...)`.
+- [ ] Implement a scrolling log view and an input text field.
+- [ ] Add "Clear" and "Auto-scroll" features.
+- [ ] Add "Lua Console" menu item in `src/plot_rendering.hpp` to toggle visibility.
+
+#### 4. Integration (`src/main.cpp`)
+Connect the new rendering logic to the main loop.
+
+- [ ] Include `console_rendering.hpp`.
+- [ ] Call `RenderLuaConsole` in the main loop when enabled.
+
+### Verification
+- [ ] Verify `print()` output appears in the console window.
+- [ ] Verify executing `x = 10` persists state for subsequent commands.
+- [ ] Verify error messages are displayed correctly for invalid syntax.

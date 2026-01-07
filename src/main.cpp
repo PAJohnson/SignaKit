@@ -146,6 +146,43 @@ void MainLoopStep(void *arg) {
     return;
   }
 
+  // Handle pending layout load (deferred for INI settings safety)
+  if (!uiPlotState.pendingLoadFilename.empty()) {
+      LayoutData data;
+      if (LoadLayout(uiPlotState.pendingLoadFilename, data)) {
+          // 1. Apply ImGui Settings (Before NewFrame)
+          if (!data.imguiSettings.empty()) {
+               ImGui::LoadIniSettingsFromMemory(data.imguiSettings.c_str(), data.imguiSettings.size());
+          }
+          
+          // 2. Apply UI State
+          uiPlotState.activePlots = data.plots;
+          uiPlotState.nextPlotId = data.nextPlotId;
+          uiPlotState.activeReadoutBoxes = data.readouts;
+          uiPlotState.nextReadoutBoxId = data.nextReadoutId;
+          uiPlotState.activeXYPlots = data.xyPlots;
+          uiPlotState.nextXYPlotId = data.nextXYPlotId;
+          uiPlotState.activeHistograms = data.histograms;
+          uiPlotState.nextHistogramId = data.nextHistogramId;
+          uiPlotState.activeFFTs = data.ffts;
+          uiPlotState.nextFFTId = data.nextFFTId;
+          uiPlotState.activeSpectrograms = data.spectrograms;
+          uiPlotState.nextSpectrogramId = data.nextSpectrogramId;
+          uiPlotState.activeButtons = data.buttons;
+          uiPlotState.nextButtonId = data.nextButtonId;
+          uiPlotState.activeToggles = data.toggles;
+          uiPlotState.nextToggleId = data.nextToggleId;
+          uiPlotState.activeTextInputs = data.textInputs;
+          uiPlotState.nextTextInputId = data.nextTextInputId;
+          
+          uiPlotState.nextTextInputId = data.nextTextInputId;
+          
+          uiPlotState.editMode = data.editMode;
+          uiPlotState.managedByImGui = !data.imguiSettings.empty();
+      }
+      uiPlotState.pendingLoadFilename.clear();
+  }
+
   ImGui_ImplOpenGL3_NewFrame();
   ImGui_ImplSDL2_NewFrame();
   ImGui::NewFrame();
