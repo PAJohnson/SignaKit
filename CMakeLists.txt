@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(TelemetryGui)
+project(SignaKit)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -171,7 +171,7 @@ set(IMGUIFILEDIALOG_SOURCES
 )
 
 # Create main executable
-add_executable(telemetry_gui
+add_executable(signakit
     src/main.cpp
     ${IMGUI_SOURCES}
     ${IMPLOT_SOURCES}
@@ -179,7 +179,7 @@ add_executable(telemetry_gui
 )
 
 # Include directories
-target_include_directories(telemetry_gui PRIVATE
+target_include_directories(signakit PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${IMPLOT_DIR}
@@ -199,17 +199,17 @@ add_custom_target(copy_scripts ALL
 )
 
 # Copy other resources to build directory
-add_custom_command(TARGET telemetry_gui POST_BUILD
+add_custom_command(TARGET signakit POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf
         ${CMAKE_CURRENT_BINARY_DIR}/Roboto-Medium.ttf
 )
 
-# Make telemetry_gui depend on the copy_scripts target
-add_dependencies(telemetry_gui copy_scripts)
+# Make signakit depend on the copy_scripts target
+add_dependencies(signakit copy_scripts)
 
 # Link libraries - Windows only
-target_link_libraries(telemetry_gui PRIVATE
+target_link_libraries(signakit PRIVATE
     mingw32
     ${SDL2_LIBRARIES}
     opengl32
@@ -227,7 +227,7 @@ target_link_libraries(telemetry_gui PRIVATE
 )
 
 # Static linking for portability
-set_target_properties(telemetry_gui PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
+set_target_properties(signakit PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
 
 # Test executables
 add_executable(struct_size_test src/struct_size_test.cpp)

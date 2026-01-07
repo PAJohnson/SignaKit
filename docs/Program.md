@@ -1,8 +1,8 @@
-# Telemetry GUI - Program Documentation
+# SignaKit - Program Documentation
 
 ## Overview
 
-The Telemetry GUI is a real-time data visualization tool designed to receive packed C struct telemetry data over UDP, parse it using Lua scripts, and display it in interactive, draggable plots.
+SignaKit is a real-time data visualization tool designed to receive packed C struct telemetry data over UDP, parse it using Lua scripts, and display it in interactive, draggable plots.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ The Telemetry GUI is a real-time data visualization tool designed to receive pac
 
 The project consists of two main executables:
 
-1. **telemetry_gui** - Main GUI application
+1. **signakit** - Main GUI application
 2. **mock_device** - Test data generator
 
 ### Data Flow
@@ -24,7 +24,7 @@ The project consists of two main executables:
          │ Port 5000
          ▼
 ┌─────────────────────────────────────────────────────────┐
-│              Telemetry GUI Application                   │
+│                  SignaKit Application                    │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │  Main GUI Thread (60 FPS)                          │ │
@@ -72,7 +72,7 @@ for details.
 
 ## Component Details
 
-### 1. telemetry_gui
+### 1. signakit
 
 **Purpose**: Real-time visualization of telemetry data streams.
 
@@ -249,7 +249,7 @@ batteryThread.join();
 
 1. **Run the GUI**:
    ```bash
-   ./telemetry_gui
+   ./signakit
    ```
 
 3. **Start data source**:
@@ -271,9 +271,9 @@ batteryThread.join();
 
 ### Basic Workflow
 
-1. Launch the telemetry GUI:
+1. Launch SignaKit:
    ```bash
-   ./telemetry_gui
+   ./signakit
    ```
 
 2. Start a data source (e.g., mock_device):
@@ -300,7 +300,7 @@ The GUI can receive data from multiple sources simultaneously:
 Edit `src/main.cpp:426`:
 ```cpp
 SDL_Window *window =
-    SDL_CreateWindow("Telemetry Analyzer", SDL_WINDOWPOS_CENTERED,
+    SDL_CreateWindow("SignaKit Analyzer", SDL_WINDOWPOS_CENTERED,
                      SDL_WINDOWPOS_CENTERED, 1920, 1080, window_flags);
                                          // ^^^^ Change resolution here
 ```
@@ -383,5 +383,5 @@ The application uses a single-threaded architecture with frame callbacks:
 
 Allow the application through Windows Firewall:
 ```powershell
-New-NetFirewallRule -DisplayName "Telemetry GUI" -Direction Inbound -Program "C:\path\to\telemetry_gui.exe" -Action Allow
+New-NetFirewallRule -DisplayName "SignaKit" -Direction Inbound -Program "C:\path\to\signakit.exe" -Action Allow
 ```

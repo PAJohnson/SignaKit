@@ -362,7 +362,7 @@ int main(int, char **) {
       (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
                         SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_MAXIMIZED);
   SDL_Window *window =
-      SDL_CreateWindow("Telemetry Analyzer", SDL_WINDOWPOS_CENTERED,
+      SDL_CreateWindow("SignaKit Analyzer", SDL_WINDOWPOS_CENTERED,
                        SDL_WINDOWPOS_CENTERED, 1600, 900, window_flags);
   if (window == NULL) {
     printf("Error: SDL_CreateWindow failed: %s\n", SDL_GetError());

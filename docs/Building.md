@@ -1,6 +1,6 @@
-# Building Telemetry GUI
+# Building SignaKit
 
-This document provides instructions for building the Telemetry GUI on Windows.
+This document provides instructions for building SignaKit on Windows.
 
 ## Prerequisites
 
@@ -46,7 +46,7 @@ All dependencies are built statically for maximum portability.
 
    ```bash
    git clone <repository-url>
-   cd Telemetry_GUI
+   cd SignaKit
    ```
 
 2. **Configure CMake with Toolchain File**
@@ -77,7 +77,7 @@ All dependencies are built statically for maximum portability.
    The executables will be in the `build` directory. You can run them from PowerShell, CMD, or the MSYS2 terminal:
 
    ```bash
-   ./telemetry_gui.exe
+   ./signakit.exe
    ./mock_device.exe
    ```
 
@@ -95,13 +95,13 @@ cmake .. -G "MSYS Makefiles" \
 
 The build system produces two executables:
 
-- **telemetry_gui** - Main GUI application for real-time telemetry visualization
+- **signakit** - Main GUI application for real-time telemetry visualization
 - **mock_device** - Mock data generator for testing (sends simulated IMU and GPS data)
 
 ### Building Individual Targets
 
 ```bash
-cmake --build . --target telemetry_gui
+cmake --build . --target signakit
 cmake --build . --target mock_device
 ```
 

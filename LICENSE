@@ -24,7 +24,7 @@ SOFTWARE.
 THIRD-PARTY SOFTWARE LICENSES
 -------------------------------------------------------------------------------
 
-TelemetryGui incorporates several third-party libraries. These are provided 
+SignaKit incorporates several third-party libraries. These are provided 
 under their respective licenses:
 
 1. SDL2 (zlib License)

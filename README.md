@@ -1,6 +1,6 @@
-# TelemetryGui
+# SignaKit
 
-TelemetryGui is a high-performance, real-time data visualization tool designed for monitoring telemetry streams. It features a zero-copy packet parsing architecture and a flexible Lua-based scripting environment for data processing and UI customization. It is heavily inspired by the utility of CANalyzer CAPL scripting, but oriented towards being capable of handling any data stream, not just CAN.
+SignaKit is a high-performance, real-time data visualization tool designed for monitoring telemetry streams. It features a zero-copy packet parsing architecture and a flexible Lua-based scripting environment for data processing and UI customization. It is heavily inspired by the utility of CANalyzer CAPL scripting, but oriented towards being capable of handling any data stream, not just CAN.
 
 A demo program, parser, and dashboard layout are provided, as well as a set of lua script examples to demonstrate the capabilities of the system. See `mock_device` (UDP telemetry packet source), `DataSource.lua` and `fast_binary.lua` for an example of a dynamic and fast packet parser, and `DemoLayout.yaml` for a dashboard that works with those elements.
 
@@ -64,4 +64,4 @@ Comprehensive documentation is available in the `docs` directory:
 
 ## License
 
-This project is dual-use and is licensed under the MIT License. See the [LICENSE](LICENSE) file for the full license text and third-party software acknowledgments.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for the full license text and third-party software acknowledgments.

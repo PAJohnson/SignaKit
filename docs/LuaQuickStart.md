@@ -1,6 +1,6 @@
 # Lua Scripting Quick Start
 
-## 5-Minute Introduction to Lua Scripting in Telemetry GUI
+## 5-Minute Introduction to Lua Scripting in SignaKit
 
 ### What Can You Do?
 

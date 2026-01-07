@@ -1,8 +1,6 @@
-# Lua Scripting Guide for Telemetry GUI
+# Lua Scripting Guide for SignaKit
 
-## Overview
-
-The Telemetry GUI supports extensibility through Lua scripts via the sol2 library. This allows you to create derived signals, apply custom transformations, and extend the functionality without modifying C++ code.
+SignaKit supports extensibility through Lua scripts via the sol2 library. This allows you to create derived signals, apply custom transformations, and extend the functionality without modifying C++ code.
 
 ## Features
 

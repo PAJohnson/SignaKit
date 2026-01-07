@@ -1,6 +1,6 @@
-# Lua Scripts for Telemetry GUI
+# Lua Scripts for SignaKit
 
-This directory contains Lua scripts that extend the functionality of the Telemetry GUI through signal transforms.
+This directory contains Lua scripts that extend the functionality of SignaKit through signal transforms.
 
 ## Available API Functions
 
