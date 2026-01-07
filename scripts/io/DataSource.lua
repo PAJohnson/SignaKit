@@ -281,33 +281,167 @@ end
 
 -- ==================== MAIN FRAME CALLBACK ====================
 
-local function data_source_frame_callback()
-    if isOnlineMode() then
-        -- If switching to online mode, clear offline data and reset mode
-        if offlineLoadedFilePath ~= "" then
-            print("[DataSource] Switching to online mode, clearing offline data")
-            set_default_signal_mode("online")
-            clear_all_signals()
-            offlineLoadedFilePath = ""
+-- ==================== MAIN ASYNC LOOP ====================
+
+spawn(function()
+    print("[DataSource] Async core loop started")
+    
+    while is_app_running() do
+        if isOnlineMode() then
+            -- Handle switching to online
+            if offlineLoadedFilePath ~= "" then
+                print("[DataSource] Switch to Online: Clearing offline data")
+                set_default_signal_mode("online")
+                clear_all_signals()
+                offlineLoadedFilePath = ""
+            end
+
+            -- Check if user toggled UDP Connect
+            if get_toggle_state("UDP Connect") then
+                if not udpConnected then
+                    connectOnline()
+                end
+            else
+                if udpConnected then
+                    disconnectOnline()
+                end
+            end
+
+            -- Process Online Data (using async helper)
+            if udpConnected and udpSocket then
+                -- Wait for at least one packet (yields internally)
+                local len, err = udpSocket:receive_ptr_async(rawPtr, RECV_BUFFER_SIZE)
+                
+                if len > 0 then
+                    packetsReceived = packetsReceived + 1
+                    
+                    if logFile then
+                        local dataStr = ffi.string(recvBuffer, len)
+                        logFile:write(dataStr)
+                        logFile:flush()
+                    end
+
+                    parse_packet_ptr(rawPtr, len)
+                    
+                    -- Drain remaining packets this frame non-blockingly
+                    while true do
+                        local l2, e2 = udpSocket:receive_ptr(rawPtr, RECV_BUFFER_SIZE)
+                        if l2 > 0 then
+                            packetsReceived = packetsReceived + 1
+                            parse_packet_ptr(rawPtr, l2)
+                        else
+                            break
+                        end
+                    end
+                elseif err and #err > 0 and err ~= "timeout" then
+                    print("[DataSource] Online: Socket error: " .. tostring(err))
+                    disconnectOnline()
+                end
+            else
+                yield() -- Wait for next frame
+            end
+        else
+            -- Offline Mode
+            if udpConnected then
+                disconnectOnline()
+            end
+
+            -- Check for file dialog result
+            if fileDialogOpen then
+                if is_file_dialog_open("OfflineLogFileDlg") then
+                    local result = get_file_dialog_result("OfflineLogFileDlg")
+                    if result then
+                        fileDialogOpen = false
+                        -- Load file (this will be nested and should also yield)
+                        loadOfflineFile(result)
+                    end
+                end
+            end
+
+            -- Check if user clicked a "Load File" button
+            if get_button_clicked("Load File") and not offlineLoading then
+                print("[DataSource] Offline: Opening file dialog...")
+                open_file_dialog("OfflineLogFileDlg", "Open Log File", ".bin")
+                fileDialogOpen = true
+            end
+            
+            yield() -- Wait for next frame
         end
-        processOnlineMode()
-    else
-        -- Disconnect online if switching modes
-        if udpConnected then
-            disconnectOnline()
+
+        -- Stats Print
+        local currentTime = get_time_seconds()
+        if currentTime - lastStatsTime >= 5.0 and packetsReceived > 0 then
+            local elapsed = currentTime - startTime
+            local packetsPerSec = packetsReceived / elapsed
+            print(string.format("[DataSource] Stats: %d pkts recv, %.1f pkts/sec",
+                               packetsReceived, packetsPerSec))
+            lastStatsTime = currentTime
         end
-        processOfflineMode()
     end
-end
-
--- ==================== CLEANUP ====================
-
-on_cleanup(function()
-    print("[DataSource] Cleanup called")
-    disconnectOnline()
 end)
 
--- ==================== REGISTER CALLBACK ====================
+-- Update loadOfflineFile to be yield-friendly
+local original_loadOfflineFile = loadOfflineFile
+loadOfflineFile = function(filepath)
+    print(string.format("[DataSource] Starting async load: %s", filepath))
+    offlineLoading = true
+    set_default_signal_mode("offline")
+    clear_all_signals()
 
-on_frame(data_source_frame_callback)
-print("[DataSource] Registered unified data source frame callback")
+    local file = io.open(filepath, "rb")
+    if not file then
+        print("[DataSource] Failed to open file")
+        offlineLoading = false
+        return false
+    end
+
+    file:seek("end")
+    local fileSize = file:seek()
+    file:seek("set", 0)
+
+    local currentPos = 0
+    local packetsProcessed = 0
+    local chunkSize = 1024
+    local lastYieldTime = get_time_seconds()
+
+    while currentPos < fileSize do
+        file:seek("set", currentPos)
+        local remainingBytes = fileSize - currentPos
+        local bytesToRead = math.min(remainingBytes, chunkSize)
+        local chunk = file:read(bytesToRead)
+
+        if not chunk or #chunk == 0 then break end
+
+        local packetSize = getPacketSize(chunk)
+        if packetSize and #chunk >= packetSize then
+            if parse_packet(chunk, #chunk) then
+                packetsProcessed = packetsProcessed + 1
+                currentPos = currentPos + packetSize
+            else
+                currentPos = currentPos + 1
+            end
+        else
+            currentPos = currentPos + 1
+        end
+
+        -- Yield every 10ms of processing to keep UI smooth
+        local now = get_time_seconds()
+        if now - lastYieldTime > 0.01 then
+            yield()
+            lastYieldTime = now
+        end
+
+        if packetsProcessed % 5000 == 0 and packetsProcessed > 0 then
+            print(string.format("[DataSource] Load Progress: %.1f%% (%d pkts)", 
+                               (currentPos / fileSize) * 100, packetsProcessed))
+        end
+    end
+
+    file:close()
+    print(string.format("[DataSource] Finished load: %d packets", packetsProcessed))
+    offlineLoadedFilePath = filepath
+    offlineLoading = false
+    return true
+end
+
+print("[DataSource] Async script initialized")

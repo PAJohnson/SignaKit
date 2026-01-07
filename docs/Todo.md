@@ -62,4 +62,39 @@ Connect the new rendering logic to the main loop.
 ### Verification
 - [ ] Verify `print()` output appears in the console window.
 - [ ] Verify executing `x = 10` persists state for subsequent commands.
-- [ ] Verify error messages are displayed correctly for invalid syntax.
+
+## Async Lua Architecture (Coroutines + C++ I/O Workers)
+
+### Goal
+Refactor the Lua integration to support "pseudo-blocking" I/O using coroutines within a single Lua state. This allows scripts to share data and libraries while preventing I/O operations from stalling the 60fps GUI.
+
+### Implementation Plan
+
+#### 1. C++ Core (LuaUDPSocket & Scheduler)
+Refactor `LuaUDPSocket` to handle its own background threading if needed, and add a coroutine scheduler to the `LuaScriptManager`.
+
+- [ ] Add a `std::vector<sol::thread>` (or `sol::coroutine`) to track active "background" tasks in `LuaScriptManager.hpp`.
+- [ ] Implement a `scheduler` that iterates through these tasks every frame and calls `resume()`.
+- [ ] Add a `spawn(function)` Lua function to start a new coroutine.
+- [ ] Wrap `LuaUDPSocket::receive` in a Lua-side helper (or C++ binding) that calls `yield()` if no data is available and the user requested a "blocking" read.
+
+#### 2. main.cpp Integration
+- [ ] Ensure `executeFrameCallbacks` also runs the coroutine scheduler.
+
+#### 3. Lua API
+Provide the necessary primitives for asynchronous scripting.
+
+- [ ] `yield()`: Passes control back to the GUI.
+- [ ] `spawn(func)`: Run a function as a persistent coroutine.
+- [ ] `sleep(seconds)`: A non-blocking sleep that yields until time has passed.
+
+#### 4. Lua Data Scripts
+Update scripts to use the new asynchronous patterns.
+
+- [ ] Refactor `DataSource.lua` to use a `while true` loop inside a `spawn()`ed coroutine.
+- [ ] Change the loop to use a "blocking" `receive()` that internally yields, making the code look synchronous but behave asynchronously.
+
+### Verification
+- [ ] Create `scripts/test/async_test.lua` to verify concurrent execution.
+- [ ] Verify GUI remains at 60fps while scripts are "blocking".
+- [ ] Verify data sharing between scripts remains functional.

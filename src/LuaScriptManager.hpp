@@ -173,20 +173,57 @@ public:
         lua = sol::state();
         lua.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string,
                           sol::lib::table, sol::lib::io, sol::lib::os, sol::lib::package,
-                          sol::lib::debug, sol::lib::bit32, sol::lib::jit, sol::lib::ffi);
+                          sol::lib::debug, sol::lib::bit32, sol::lib::jit, sol::lib::ffi,
+                          sol::lib::coroutine);
+
+        // ---------------------------------------------------------------------
+        // Tier 5: Core Types & I/O (Register FIRST for dependencies)
+        // ---------------------------------------------------------------------
+
+        // UDPSocket usertype
+        lua.new_usertype<LuaUDPSocket>("UDPSocket",
+            sol::constructors<LuaUDPSocket()>(),
+            "bind", &LuaUDPSocket::bind,
+            "receive", &LuaUDPSocket::receive,
+            "receive_ptr", &LuaUDPSocket::receive_ptr,
+            "set_non_blocking", &LuaUDPSocket::set_non_blocking,
+            "close", &LuaUDPSocket::close,
+            "is_open", &LuaUDPSocket::is_open
+        );
+
+        lua.set_function("create_udp_socket", []() { return std::make_shared<LuaUDPSocket>(); });
+
+        // SharedBuffer usertype (FFI support)
+        lua.new_usertype<SharedBuffer>("SharedBuffer",
+            sol::constructors<SharedBuffer(size_t)>(),
+            "get_ptr", &SharedBuffer::get_ptr,
+            "get_size", &SharedBuffer::get_size
+        );
+        
+        // spawn(function) - starts a new coroutine
+        lua.set_function("spawn", [this](sol::main_function func, sol::this_main_state L) {
+            std::lock_guard<std::mutex> lock(activeCoroutinesMut);
+            sol::thread thr = sol::thread::create(L);
+            sol::state_view sv = thr.state();
+            spawnQueue.push_back({std::move(thr), sol::coroutine(sv, func), 0.0});
+        });
+
+        // yield(...) - yields control back to C++ with optional values
+        lua.set_function("yield", sol::yielding([](sol::variadic_args args) {
+            return args;
+        }));
 
         // Expose the signal registry API
         exposeSignalAPI();
 
         // Expose packet parser registration API
-        // register_parser(name, function) - registers a parser that receives (buffer, length) and returns true if handled
-        lua.set_function("register_parser", [this](const std::string& parserName, sol::protected_function func) {
+        lua.set_function("register_parser", [this](const std::string& parserName, sol::main_protected_function func) {
             registerPacketParser(parserName, func);
         });
 
         // Optimization: Check if a signal is active in the UI
         lua.set_function("is_signal_active", [this](const std::string& name) -> bool {
-            if (currentUIPlotState == nullptr) return true; // Default to active if we can't check
+            if (currentUIPlotState == nullptr) return true;
             return currentUIPlotState->isSignalActive(name);
         });
 
@@ -196,14 +233,17 @@ public:
             return callbacks.valid() && callbacks.get_type() == sol::type::table && callbacks.as<sol::table>().size() > 0;
         });
 
-        // Pure-Lua packet callback system (no C++ storage, eliminates context switches)
-        lua.script(R"(
+        // Expose logging API
+        lua.set_function("log", [](const std::string& message) {
+            printf("[Lua] %s\n", message.c_str());
+        });
+
+        // Pure-Lua packet callback system & async helpers
+        auto scriptResult = lua.safe_script(R"(
             -- Global registry of packet callbacks (stored in Lua, not C++)
-            -- Structure: _packet_callbacks[packetType] = { {outputName, func}, ... }
             _packet_callbacks = {}
 
             -- Register a packet callback
-            -- on_packet(packetType, outputName, function) - registers a callback for a specific packet
             function on_packet(packetType, outputName, func)
                 if not _packet_callbacks[packetType] then
                     _packet_callbacks[packetType] = {}
@@ -215,262 +255,155 @@ public:
                 log("Registered packet callback: " .. packetType .. " -> " .. outputName)
             end
 
-            -- Execute packet callbacks for a specific packet type
-            -- trigger_packet_callbacks(packetType, timestamp) - triggers all on_packet() callbacks
-            -- Called from parsers immediately after parsing a packet
+            -- Execute packet callbacks
             function trigger_packet_callbacks(packetType, timestamp)
                 local callbacks = _packet_callbacks[packetType]
-                if not callbacks then
-                    return
-                end
+                if not callbacks then return end
 
-                -- Execute all callbacks for this packet type
                 for _, cb in ipairs(callbacks) do
                     local success, result = pcall(cb.callback)
                     if success and type(result) == "number" then
-                        -- Store the computed value in the output signal
                         update_signal(cb.outputName, timestamp, result)
                     elseif not success then
                         log("Error in packet callback " .. cb.outputName .. ": " .. tostring(result))
                     end
                 end
             end
+
+            -- Global sleep helper
+            function sleep(s)
+                yield(s)
+            end
+
+            -- Async Socket helper
+            function UDPSocket:receive_async(max_size)
+                while true do
+                    local data, err = self:receive(max_size or 65536)
+                    if data and #data > 0 then
+                        return data, err
+                    end
+                    if err ~= "timeout" then
+                        return nil, err
+                    end
+                    yield()
+                end
+            end
+
+            -- Async Socket helper for pointers
+            function UDPSocket:receive_ptr_async(ptr, max_size)
+                while true do
+                    local len, err = self:receive_ptr(ptr, max_size or 65536)
+                    if len > 0 then
+                        return len, err
+                    end
+                    if err ~= "timeout" then
+                        return -1, err
+                    end
+                    yield()
+                end
+            end
         )");
 
-        // Expose logging API
-        lua.set_function("log", [](const std::string& message) {
-            printf("[Lua] %s\n", message.c_str());
-        });
+        if (!scriptResult.valid()) {
+            sol::error err = scriptResult;
+            printf("[LuaScriptManager] Error initializing internal Lua API: %s\n", err.what());
+        }
 
-        // Tier 3: Frame callback registration API
-        // on_frame(function) - registers a callback to run every GUI frame
-        lua.set_function("on_frame", [this](sol::protected_function func) {
+        // Tier 3: Core registration APIs
+        lua.set_function("on_frame", [this](sol::main_protected_function func) {
             registerFrameCallback(func);
         });
 
-        // Tier 3: Alert/condition monitoring API
-        // on_alert(name, conditionFunction, actionFunction, [cooldownSeconds]) - monitors a condition
         lua.set_function("on_alert", [this](const std::string& alertName,
-                                            sol::protected_function conditionFunc,
-                                            sol::protected_function actionFunc,
+                                            sol::main_protected_function conditionFunc,
+                                            sol::main_protected_function actionFunc,
                                             sol::optional<double> cooldownSeconds) {
             registerAlert(alertName, conditionFunc, actionFunc, cooldownSeconds.value_or(0.0));
         });
 
-        // Tier 3: Get frame number and delta time
-        lua.set_function("get_frame_number", [this]() -> uint64_t {
-            return currentFrameNumber;
-        });
+        lua.set_function("get_frame_number", [this]() -> uint64_t { return currentFrameNumber; });
+        lua.set_function("get_delta_time", [this]() -> double { return currentDeltaTime; });
+        lua.set_function("get_plot_count", [this]() -> int { return currentPlotCount; });
 
-        lua.set_function("get_delta_time", [this]() -> double {
-            return currentDeltaTime;
-        });
-
-        // Tier 3: Get plot count (for monitoring GUI state)
-        lua.set_function("get_plot_count", [this]() -> int {
-            return currentPlotCount;
-        });
-
-        // Tier 4: Control element state access API
-        // Button controls
-        lua.set_function("get_button_clicked", [this](const std::string& buttonTitle) -> bool {
+        // Tier 4: UI state access
+        lua.set_function("get_button_clicked", [this](const std::string& title) -> bool {
             if (currentUIPlotState == nullptr) return false;
-            for (const auto& button : currentUIPlotState->activeButtons) {
-                if (button.title == buttonTitle) {
-                    return button.clicked;
-                }
-            }
+            for (const auto& b : currentUIPlotState->activeButtons) if (b.title == title) return b.clicked;
             return false;
         });
 
-        // Toggle controls
-        lua.set_function("get_toggle_state", [this](const std::string& toggleTitle) -> bool {
+        lua.set_function("get_toggle_state", [this](const std::string& title) -> bool {
             if (currentUIPlotState == nullptr) return false;
-            for (const auto& toggle : currentUIPlotState->activeToggles) {
-                if (toggle.title == toggleTitle) {
-                    return toggle.state;
-                }
-            }
+            for (const auto& t : currentUIPlotState->activeToggles) if (t.title == title) return t.state;
             return false;
         });
 
-        lua.set_function("set_toggle_state", [this](const std::string& toggleTitle, bool state) {
+        lua.set_function("set_toggle_state", [this](const std::string& title, bool state) {
             if (currentUIPlotState == nullptr) return;
-            for (auto& toggle : currentUIPlotState->activeToggles) {
-                if (toggle.title == toggleTitle) {
-                    toggle.state = state;
-                    return;
-                }
-            }
+            for (auto& t : currentUIPlotState->activeToggles) if (t.title == title) { t.state = state; return; }
         });
 
-        // Text input controls
-        lua.set_function("get_text_input", [this](const std::string& inputTitle) -> sol::optional<std::string> {
+        lua.set_function("get_text_input", [this](const std::string& title) -> sol::optional<std::string> {
             if (currentUIPlotState == nullptr) return sol::nullopt;
-            for (const auto& textInput : currentUIPlotState->activeTextInputs) {
-                if (textInput.title == inputTitle) {
-                    return std::string(textInput.textBuffer);
-                }
-            }
+            for (const auto& i : currentUIPlotState->activeTextInputs) if (i.title == title) return std::string(i.textBuffer);
             return sol::nullopt;
         });
 
-        lua.set_function("get_text_input_enter_pressed", [this](const std::string& inputTitle) -> bool {
-            if (currentUIPlotState == nullptr) return false;
-            for (const auto& textInput : currentUIPlotState->activeTextInputs) {
-                if (textInput.title == inputTitle) {
-                    return textInput.enterPressed;
-                }
-            }
-            return false;
-        });
-
-        lua.set_function("set_text_input", [this](const std::string& inputTitle, const std::string& text) {
-            if (currentUIPlotState == nullptr) return;
-            for (auto& textInput : currentUIPlotState->activeTextInputs) {
-                if (textInput.title == inputTitle) {
-                    strncpy(textInput.textBuffer, text.c_str(), sizeof(textInput.textBuffer) - 1);
-                    textInput.textBuffer[sizeof(textInput.textBuffer) - 1] = '\0';
-                    return;
-                }
-            }
-        });
-
-        // Tier 4.5: Script lifecycle management - cleanup callbacks
-        lua.set_function("on_cleanup", [this](sol::protected_function func) {
+        lua.set_function("on_cleanup", [this](sol::main_protected_function func) {
             cleanupCallbacks.push_back(func);
-            printf("[LuaScriptManager] Registered cleanup callback\n");
         });
 
-        // Tier 5: sockpp Integration - UDP Socket API
-        // Register LuaUDPSocket as a usertype
-        lua.new_usertype<LuaUDPSocket>("UDPSocket",
-            sol::constructors<LuaUDPSocket()>(),
-            "bind", &LuaUDPSocket::bind,
-            "receive", &LuaUDPSocket::receive,
-            "receive_ptr", &LuaUDPSocket::receive_ptr,
-            "set_non_blocking", &LuaUDPSocket::set_non_blocking,
-            "close", &LuaUDPSocket::close,
-            "is_open", &LuaUDPSocket::is_open
-        );
-
-        // Factory function for creating UDP sockets
-        lua.set_function("create_udp_socket", []() {
-            return std::make_shared<LuaUDPSocket>();
+        // Tier 5: Remaining System APIs
+        lua.set_function("parse_packet", [this](const std::string& b, size_t l) -> bool {
+            if (currentSignalRegistry == nullptr) return false;
+            return parsePacket(b.c_str(), l, *currentSignalRegistry);
         });
 
-        // Tier 5: Expose packet parsing to Lua (for I/O scripts to call)
-        lua.set_function("parse_packet", [this](const std::string& buffer, size_t length) -> bool {
-            if (currentSignalRegistry == nullptr) {
-                printf("[Lua] Warning: Cannot parse packet - no active signal registry\n");
-                return false;
-            }
-            return parsePacket(buffer.c_str(), length, *currentSignalRegistry);
-        });
-
-        // Factory for SharedBuffers
-        lua.new_usertype<SharedBuffer>("SharedBuffer",
-            sol::constructors<SharedBuffer(size_t)>(),
-            "get_ptr", &SharedBuffer::get_ptr,
-            "get_size", &SharedBuffer::get_size
-        );
-
-        // Tier 5: Zero-Copy Packet Parsing API (takes pointer address)
-        // parse_packet_ptr(ptr, length)
         lua.set_function("parse_packet_ptr", [this](void* ptr, size_t length) -> bool {
-            if (ptr == nullptr) {
-                printf("[Lua] Error: parse_packet_ptr received null pointer\n");
-                return false;
-            }
-
-            if (currentSignalRegistry == nullptr) {
-                // Try default registry if set
-                if (defaultSignalRegistry) {
-                     return parsePacket(ptr, length, *defaultSignalRegistry, "fast_binary");
-                }
-                printf("[Lua] Warning: Cannot parse packet - no active signal registry\n");
-                return false;
-            }
-            return parsePacket(ptr, length, *currentSignalRegistry, "fast_binary");
+            if (ptr == nullptr) return false;
+            auto* registry = currentSignalRegistry ? currentSignalRegistry : defaultSignalRegistry;
+            if (registry == nullptr) return false;
+            return parsePacket(ptr, length, *registry, "fast_binary");
         });
 
-        lua.set_function("sleep_ms", [this](int milliseconds) {
-            sleepMs(milliseconds);
-        });
-
-        lua.set_function("is_app_running", [this]() -> bool {
-            return isAppRunning();
-        });
-
-        // Tier 5: Timing API
+        lua.set_function("sleep_ms", [this](int ms) { sleepMs(ms); });
+        lua.set_function("is_app_running", [this]() -> bool { return isAppRunning(); });
+        
         lua.set_function("get_time_seconds", []() -> double {
-            return std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch()
-            ).count();
+            return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
         });
 
-        // Offline playback API
-        // Set a signal's playback mode (online = circular buffer, offline = unlimited growth)
         lua.set_function("set_signal_mode", [this](const std::string& name, const std::string& mode) {
-            if (currentSignalRegistry == nullptr) {
-                printf("[Lua] Warning: Cannot set signal mode - no active signal registry\n");
-                return;
-            }
-
-            PlaybackMode playbackMode = (mode == "offline") ? PlaybackMode::OFFLINE : PlaybackMode::ONLINE;
-
+            if (currentSignalRegistry == nullptr) return;
+            PlaybackMode m = (mode == "offline") ? PlaybackMode::OFFLINE : PlaybackMode::ONLINE;
             auto it = currentSignalRegistry->find(name);
-            if (it != currentSignalRegistry->end()) {
-                it->second.SetMode(playbackMode);
-            } else {
-                // Create new signal in the specified mode
-                (*currentSignalRegistry)[name] = Signal(name, 10000, playbackMode);
-            }
+            if (it != currentSignalRegistry->end()) it->second.SetMode(m);
+            else (*currentSignalRegistry)[name] = Signal(name, 10000, m);
         });
 
-        // Clear all signals (useful when loading a new offline file)
         lua.set_function("clear_all_signals", [this]() {
-            std::map<std::string, Signal>* registry = currentSignalRegistry ? currentSignalRegistry : defaultSignalRegistry;
-            if (registry == nullptr) {
-                printf("[Lua] Warning: Cannot clear signals - no active signal registry\n");
-                return;
-            }
-            
-            size_t count = 0;
-            for (auto& pair : *registry) {
-                pair.second.Clear();
-                count++;
-            }
-            printf("[LuaScriptManager] Cleared data for %zu signals (maintained registry names and IDs)\n", count);
+            auto* r = currentSignalRegistry ? currentSignalRegistry : defaultSignalRegistry;
+            if (r) for (auto& p : *r) p.second.Clear();
         });
 
-        // Set the default playback mode for newly created signals
         lua.set_function("set_default_signal_mode", [this](const std::string& mode) {
-            if (mode == "offline") {
-                defaultSignalMode = PlaybackMode::OFFLINE;
-                printf("[Lua] Default signal mode set to OFFLINE\n");
-            } else {
-                defaultSignalMode = PlaybackMode::ONLINE;
-                printf("[Lua] Default signal mode set to ONLINE\n");
-            }
+            defaultSignalMode = (mode == "offline") ? PlaybackMode::OFFLINE : PlaybackMode::ONLINE;
         });
 
-        // File dialog support for offline playback
-        lua.set_function("open_file_dialog", [](const std::string& dialogKey, const std::string& title, const std::string& filters) {
-            IGFD::FileDialogConfig config;
-            config.path = ".";
-            ImGuiFileDialog::Instance()->OpenDialog(dialogKey.c_str(), title.c_str(), filters.c_str(), config);
+        lua.set_function("open_file_dialog", [](const std::string& k, const std::string& t, const std::string& f) {
+            IGFD::FileDialogConfig config; config.path = ".";
+            ImGuiFileDialog::Instance()->OpenDialog(k.c_str(), t.c_str(), f.c_str(), config);
         });
 
-        lua.set_function("is_file_dialog_open", [](const std::string& dialogKey) -> bool {
-            return ImGuiFileDialog::Instance()->Display(dialogKey.c_str(), ImGuiWindowFlags_None, ImVec2(800, 600));
+        lua.set_function("is_file_dialog_open", [](const std::string& k) -> bool {
+            return ImGuiFileDialog::Instance()->Display(k.c_str(), ImGuiWindowFlags_None, ImVec2(800, 600));
         });
 
-        lua.set_function("get_file_dialog_result", [this](const std::string& dialogKey) -> sol::object {
+        lua.set_function("get_file_dialog_result", [this](const std::string& k) -> sol::object {
             if (ImGuiFileDialog::Instance()->IsOk()) {
-                std::string filePathName = ImGuiFileDialog::Instance()->GetFilePathName();
+                std::string res = ImGuiFileDialog::Instance()->GetFilePathName();
                 ImGuiFileDialog::Instance()->Close();
-                return sol::make_object(lua, filePathName);
+                return sol::make_object(lua, res);
             }
             ImGuiFileDialog::Instance()->Close();
             return sol::lua_nil;
@@ -551,6 +484,12 @@ public:
         frameCallbacks.clear();
         alerts.clear();
         cleanupCallbacks.clear();
+        
+        {
+            std::lock_guard<std::mutex> lock(activeCoroutinesMut);
+            activeCoroutines.clear();
+            spawnQueue.clear();
+        }
 
         // Reinitialize Lua state
         initializeLuaState();
@@ -599,12 +538,75 @@ public:
             }
         }
 
+        // Execute all active coroutines (Scheduler)
+        runCoroutineScheduler(deltaTime);
+
         // Execute alert monitoring
         executeAlerts();
 
         // Clear context
         currentSignalRegistry = nullptr;
         currentUIPlotState = nullptr;
+    }
+
+    // Tick the coroutine scheduler
+    void runCoroutineScheduler(double deltaTime) {
+        double currentTime = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+
+        // 1. Process Spawn Queue (Move new coroutines into the active list)
+        {
+            std::lock_guard<std::mutex> lock(activeCoroutinesMut);
+            if (!spawnQueue.empty()) {
+                activeCoroutines.insert(activeCoroutines.end(),
+                    std::make_move_iterator(spawnQueue.begin()),
+                    std::make_move_iterator(spawnQueue.end()));
+                spawnQueue.clear();
+            }
+        }
+
+        // 2. Safely iterate over active coroutines
+        // Use index-based loop in case the vector reallocates (though it shouldn't now with the queue)
+        for (size_t i = 0; i < activeCoroutines.size(); ) {
+            auto& entry = activeCoroutines[i];
+
+            // Check if it's sleeping
+            if (currentTime < entry.wakeTime) {
+                i++;
+                continue;
+            }
+
+            // Resume the coroutine
+            auto result = entry.coro();
+            
+            if (!result.valid()) {
+                sol::error err = result;
+                printf("[LuaScriptManager] Coroutine error: %s\n", err.what());
+                activeCoroutines.erase(activeCoroutines.begin() + i);
+                continue;
+            }
+
+            // Check status
+            if (entry.coro.status() == sol::call_status::yielded) {
+                // If it yielded with a sleep value
+                if (result.return_count() > 0) {
+                    sol::object ret = result[0];
+                    if (ret.is<double>()) {
+                        entry.wakeTime = currentTime + ret.as<double>();
+                    } else {
+                        // Normal yield, wake up next frame
+                        entry.wakeTime = 0.0;
+                    }
+                } else {
+                    entry.wakeTime = 0.0;
+                }
+                i++;
+            } else {
+                // Finished
+                activeCoroutines.erase(activeCoroutines.begin() + i);
+            }
+        }
     }
 
     // Tier 4.5: Execute cleanup callbacks (called before script reload/unload)
@@ -766,24 +768,34 @@ private:
     sol::state lua;
     std::vector<LuaScript> scripts;
 
+    // Coroutine tracking
+    struct CoroutineEntry {
+        sol::thread thread;
+        sol::coroutine coro;
+        double wakeTime = 0.0;
+    };
+    std::vector<CoroutineEntry> activeCoroutines;
+    std::vector<CoroutineEntry> spawnQueue;
+    std::mutex activeCoroutinesMut;
+
     // Vector of registered packet parsers: (parserName, parserFunction)
-    std::vector<std::pair<std::string, sol::protected_function>> packetParsers;
+    std::vector<std::pair<std::string, sol::main_protected_function>> packetParsers;
 
     // Tier 3: Frame callbacks
-    std::vector<sol::protected_function> frameCallbacks;
+    std::vector<sol::main_protected_function> frameCallbacks;
 
     // Tier 4.5: Cleanup callbacks (called before script reload/unload)
-    std::vector<sol::protected_function> cleanupCallbacks;
+    std::vector<sol::main_protected_function> cleanupCallbacks;
 
     // Tier 3: Alert monitoring
     struct Alert {
         std::string name;
-        sol::protected_function conditionFunc;
-        sol::protected_function actionFunc;
+        sol::main_protected_function conditionFunc;
+        sol::main_protected_function actionFunc;
         double cooldownSeconds;
         double lastTriggerTime;
 
-        Alert(const std::string& n, sol::protected_function cond, sol::protected_function act, double cooldown)
+        Alert(const std::string& n, sol::main_protected_function cond, sol::main_protected_function act, double cooldown)
             : name(n), conditionFunc(cond), actionFunc(act), cooldownSeconds(cooldown), lastTriggerTime(-1e9) {}
     };
     std::vector<Alert> alerts;
@@ -1153,15 +1165,15 @@ private:
     }
 
     // Tier 3: Register a frame callback function
-    void registerFrameCallback(sol::protected_function func) {
+    void registerFrameCallback(sol::main_protected_function func) {
         frameCallbacks.push_back(func);
         printf("[LuaScriptManager] Registered frame callback (total: %zu)\n", frameCallbacks.size());
     }
 
     // Tier 3: Register an alert with condition monitoring
     void registerAlert(const std::string& alertName,
-                      sol::protected_function conditionFunc,
-                      sol::protected_function actionFunc,
+                      sol::main_protected_function conditionFunc,
+                      sol::main_protected_function actionFunc,
                       double cooldownSeconds) {
         alerts.emplace_back(alertName, conditionFunc, actionFunc, cooldownSeconds);
         printf("[LuaScriptManager] Registered alert: %s (cooldown: %.1fs)\n", alertName.c_str(), cooldownSeconds);
@@ -1228,7 +1240,7 @@ private:
     // Register a packet parser function
     // parserName: Name of the parser (for debugging)
     // func: Lua function that receives (buffer, length) and returns true if packet was handled
-    void registerPacketParser(const std::string& parserName, sol::protected_function func) {
+    void registerPacketParser(const std::string& parserName, sol::main_protected_function func) {
         packetParsers.push_back({parserName, func});
         printf("[LuaScriptManager] Registered packet parser: %s\n", parserName.c_str());
     }

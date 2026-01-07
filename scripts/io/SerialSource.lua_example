@@ -1,0 +1,60 @@
+-- SerialSource.lua_example
+-- Demonstrates how to handle a blocking data source in a background coroutine
+-- This allows the GUI to stay responsive even if the source is slow or blocking
+
+print("========================================")
+print("SerialSource.lua - Async Serial Simulation")
+print("========================================")
+
+-- Simulation state
+local serialPortOpen = false
+local baudRate = 115200
+
+-- Mock Serial API (Simulated)
+local SerialMock = {}
+function SerialMock.read(size)
+    -- Simulate a slow serial read
+    -- In a real scenario, this might call a C++ Serial helper
+    -- that checks for data and returns nil if none.
+    
+    -- For simulation, we'll just yield 99% of the time
+    if math.random() > 0.95 then
+        -- Return a mock IMU packet
+        local t = get_time_seconds()
+        return "IMU" .. string.rep("\0", 161) -- Mock 164 byte packet
+    end
+    return nil -- No data
+end
+
+-- Main Serial Worker
+spawn(function()
+    print("[SerialSource] Serial worker started")
+    
+    while is_app_running() do
+        -- Check if "Serial Connect" toggle is active
+        if get_toggle_state("Serial Connect") then
+            if not serialPortOpen then
+                print("[SerialSource] Connecting to serial port...")
+                serialPortOpen = true
+                -- simulate_connect()
+            end
+            
+            -- Try to read data
+            local data = SerialMock.read(1024)
+            if data then
+                parse_packet(data, #data)
+            else
+                -- No data, yield to let GUI render
+                yield()
+            end
+        else
+            if serialPortOpen then
+                print("[SerialSource] Closing serial port")
+                serialPortOpen = false
+            end
+            yield() -- Wait for next frame
+        end
+    end
+end)
+
+print("[SerialSource] Async worker initialized")
