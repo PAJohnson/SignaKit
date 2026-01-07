@@ -53,7 +53,7 @@ PlaybackMode currentPlaybackMode = PlaybackMode::ONLINE;
 
 // Parser selection state
 std::vector<std::string> availableParsers;
-std::string selectedParser = "legacy_binary";
+std::string selectedParser = "fast_binary";
 std::mutex parserSelectionMutex;
 
 // Offline playback state

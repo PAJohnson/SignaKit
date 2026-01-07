@@ -36,6 +36,15 @@ struct LuaScript {
         : name(n), filepath(fp), enabled(true), hasError(false) {}
 };
 
+// Tier 5: Robust bridge between C++ and LuaJIT FFI
+struct SharedBuffer {
+    std::vector<uint8_t> data;
+    SharedBuffer(size_t size) : data(size) {}
+    
+    void* get_ptr() { return data.data(); }
+    size_t get_size() const { return data.size(); }
+};
+
 // Tier 5: Lua-accessible UDP socket wrapper using sockpp
 class LuaUDPSocket {
 private:
@@ -114,6 +123,38 @@ public:
     bool is_open() const {
         return socket.is_open();
     }
+    // Receive data directly into a memory buffer (Zero-Copy for FFI)
+    // ptr: Pointer to the buffer (handles sol::lightuserdata automatically)
+    // max_size: Buffer size
+    // Returns: tuple(bytes_received, error_string)
+    std::tuple<int, std::string> receive_ptr(void* ptr, int max_size) {
+        if (!is_bound) {
+            return std::make_tuple(-1, "not bound");
+        }
+        if (!ptr) {
+            return std::make_tuple(-1, "null pointer");
+        }
+
+        ssize_t n = socket.recv(ptr, max_size);
+
+        if (n > 0) {
+            return std::make_tuple((int)n, "");
+        } else if (n == 0) {
+            return std::make_tuple(0, "closed");
+        } else {
+            int err = socket.last_error();
+            #ifdef _WIN32
+                if (err == WSAEWOULDBLOCK) {
+                    return std::make_tuple(0, "timeout"); 
+                }
+            #else
+                if (err == EAGAIN || err == EWOULDBLOCK) {
+                    return std::make_tuple(0, "timeout");
+                }
+            #endif
+            return std::make_tuple(-1, socket.last_error_str());
+        }
+    }
 };
 
 class LuaScriptManager {
@@ -131,7 +172,8 @@ public:
     void initializeLuaState() {
         lua = sol::state();
         lua.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string,
-                          sol::lib::table, sol::lib::io, sol::lib::os, sol::lib::package);
+                          sol::lib::table, sol::lib::io, sol::lib::os, sol::lib::package,
+                          sol::lib::debug, sol::lib::bit32, sol::lib::jit, sol::lib::ffi);
 
         // Expose the signal registry API
         exposeSignalAPI();
@@ -306,6 +348,7 @@ public:
             sol::constructors<LuaUDPSocket()>(),
             "bind", &LuaUDPSocket::bind,
             "receive", &LuaUDPSocket::receive,
+            "receive_ptr", &LuaUDPSocket::receive_ptr,
             "set_non_blocking", &LuaUDPSocket::set_non_blocking,
             "close", &LuaUDPSocket::close,
             "is_open", &LuaUDPSocket::is_open
@@ -323,6 +366,32 @@ public:
                 return false;
             }
             return parsePacket(buffer.c_str(), length, *currentSignalRegistry);
+        });
+
+        // Factory for SharedBuffers
+        lua.new_usertype<SharedBuffer>("SharedBuffer",
+            sol::constructors<SharedBuffer(size_t)>(),
+            "get_ptr", &SharedBuffer::get_ptr,
+            "get_size", &SharedBuffer::get_size
+        );
+
+        // Tier 5: Zero-Copy Packet Parsing API (takes pointer address)
+        // parse_packet_ptr(ptr, length)
+        lua.set_function("parse_packet_ptr", [this](void* ptr, size_t length) -> bool {
+            if (ptr == nullptr) {
+                printf("[Lua] Error: parse_packet_ptr received null pointer\n");
+                return false;
+            }
+
+            if (currentSignalRegistry == nullptr) {
+                // Try default registry if set
+                if (defaultSignalRegistry) {
+                     return parsePacket(ptr, length, *defaultSignalRegistry, "fast_binary");
+                }
+                printf("[Lua] Warning: Cannot parse packet - no active signal registry\n");
+                return false;
+            }
+            return parsePacket(ptr, length, *currentSignalRegistry, "fast_binary");
         });
 
         lua.set_function("sleep_ms", [this](int milliseconds) {
@@ -361,11 +430,18 @@ public:
 
         // Clear all signals (useful when loading a new offline file)
         lua.set_function("clear_all_signals", [this]() {
-            if (currentSignalRegistry == nullptr) {
+            std::map<std::string, Signal>* registry = currentSignalRegistry ? currentSignalRegistry : defaultSignalRegistry;
+            if (registry == nullptr) {
                 printf("[Lua] Warning: Cannot clear signals - no active signal registry\n");
                 return;
             }
-            currentSignalRegistry->clear();
+            
+            size_t count = 0;
+            for (auto& pair : *registry) {
+                pair.second.Clear();
+                count++;
+            }
+            printf("[LuaScriptManager] Cleared data for %zu signals (maintained registry names and IDs)\n", count);
         });
 
         // Set the default playback mode for newly created signals
@@ -615,6 +691,45 @@ public:
         return handled;
     }
 
+    // Tier 5: Zero-Copy Packet Parsing (FFI Support)
+    // Returns true if handled.
+    bool parsePacket(const void* data, size_t length, std::map<std::string, Signal>& signalRegistry, const std::string& selectedParser = "") {
+        currentSignalRegistry = &signalRegistry;
+        bool handled = false;
+
+        // Try each registered parser
+        for (const auto& [parserName, parserFunc] : packetParsers) {
+            if (!selectedParser.empty() && parserName != selectedParser) continue;
+
+            try {
+                // Pass pointer directly to Lua as lightuserdata
+                auto result = parserFunc(data, length);
+                
+                if (result.valid() && result.return_count() > 0) {
+                    sol::object retVal = result;
+                    if (retVal.is<bool>() && retVal.as<bool>()) {
+                        handled = true;
+                        break;
+                    }
+                } else if (!result.valid()) {
+                    sol::error err = result;
+                    printf("[LuaScriptManager] FFI parser '%s' error: %s\n", parserName.c_str(), err.what());
+                }
+            } catch (const std::exception& e) {
+                printf("[LuaScriptManager] Exception in FFI parser '%s': %s\n", parserName.c_str(), e.what());
+            }
+        }
+        
+        static int parseFailCounter = 0;
+        if (!handled && length > 0) {
+            if (parseFailCounter++ % 1000 == 0) {
+                printf("[LuaScriptManager] Warning: No parser handled packet of length %zu (total unhandled: %d)\n", length, parseFailCounter);
+            }
+        }
+
+        return handled;
+    }
+
     void setAppRunningPtr(std::atomic<bool>* ptr) {
         appRunningPtr = ptr;
     }
@@ -638,7 +753,16 @@ public:
         printf("[LuaScriptManager] All Lua threads stopped\n");
     }
 
+    // Clear the fast access cache (call when registry is cleared or pointers might be invalid)
+    void clearSignalCache() {
+        signalCache.clear();
+        signalNameCache.clear();
+    }
+
 private:
+    // Fast access signal cache
+    std::vector<Signal*> signalCache;
+    std::unordered_map<std::string, int> signalNameCache;
     sol::state lua;
     std::vector<LuaScript> scripts;
 
@@ -969,6 +1093,62 @@ private:
                 return false;
             }
             return currentSignalRegistry->find(name) != currentSignalRegistry->end();
+        });
+
+        // Optimization: Fast Signal Access API
+        // Get integer ID for a signal name (creates signal if needed)
+        lua.set_function("get_signal_id", [this](const std::string& name) -> int {
+            // Check cache first
+            auto it = signalNameCache.find(name);
+            if (it != signalNameCache.end()) {
+                return it->second;
+            }
+
+            // Not in cache, get from registry
+            std::map<std::string, Signal>* registry = currentSignalRegistry ? currentSignalRegistry : defaultSignalRegistry;
+            if (!registry) {
+                printf("[Lua] Error: get_signal_id('%s') failed - no registry found\n", name.c_str());
+                return -1;
+            }
+
+            // Find or create in registry
+            if (registry->find(name) == registry->end()) {
+                 (*registry)[name] = Signal(name, 10000, defaultSignalMode);
+                 // printf("[Lua] Registered new signal in registry: %s\n", name.c_str());
+            }
+
+            // Add to cache
+            Signal* sigPtr = &(*registry)[name];
+            int id = static_cast<int>(signalCache.size());
+            signalCache.push_back(sigPtr);
+            signalNameCache[name] = id;
+            
+            // printf("[Lua] Cached signal ID: %s -> %d\n", name.c_str(), id);
+            return id;
+        });
+
+        // Update signal using fast ID access (O(1))
+        lua.set_function("update_signal_fast", [this](int id, double timestamp, double value) {
+            if (id >= 0 && id < (int)signalCache.size()) {
+                Signal* sig = signalCache[id];
+                
+                // Debug: Log the first update for this signal to confirm pipeline is working
+                static std::unordered_set<int> firstUpdateLogged;
+                if (firstUpdateLogged.find(id) == firstUpdateLogged.end()) {
+                    printf("[Lua] Initial update for signal ID %d (%s): t=%f, v=%f\n", 
+                           id, sig->name.c_str(), timestamp, value);
+                    firstUpdateLogged.insert(id);
+                }
+                
+                sig->AddPoint(timestamp, value);
+            } else if (id != -1) {
+                // Only log if not -1 (which is returned on error) to avoid spam
+                static int spamCounter = 0;
+                if (spamCounter++ % 1000 == 0) {
+                    printf("[Lua] Warning: update_signal_fast received invalid ID %d (cache size %zu)\n", 
+                           id, signalCache.size());
+                }
+            }
         });
     }
 

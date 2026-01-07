@@ -16,10 +16,12 @@ local startTime = get_time_seconds()
 local lastStatsTime = startTime
 local logFile = nil
 
--- Offline mode state
-local offlineLoadedFilePath = ""
-local offlineLoading = false
-local fileDialogOpen = false
+-- Tier 5: Robust shared memory via SharedBuffer usertype
+local ffi = require("ffi")
+local RECV_BUFFER_SIZE = 65536
+local sharedBuffer = SharedBuffer.new(RECV_BUFFER_SIZE)
+local rawPtr = sharedBuffer:get_ptr() -- sol::lightuserdata (raw address)
+local recvBuffer = ffi.cast("uint8_t*", rawPtr) -- FFI pointer for data access
 
 -- ==================== HELPER FUNCTIONS ====================
 
@@ -102,20 +104,23 @@ local function processOnlineMode()
         local packetsThisFrame = 0
 
         while true do
-            local data, err = udpSocket:receive(65536)
+            -- FFI Zero-Copy Receive
+            -- Use lightuserdata (rawPtr) for robust 64-bit pointer passing
+            local len, err = udpSocket:receive_ptr(rawPtr, RECV_BUFFER_SIZE)
 
-            if data and #data > 0 then
+            if len > 0 then
                 packetsReceived = packetsReceived + 1
                 packetsThisFrame = packetsThisFrame + 1
 
-                -- Log raw packet to file
+                -- Log raw packet to file (requires string copy, but only if logging)
                 if logFile then
-                    logFile:write(data)
+                    local dataStr = ffi.string(recvBuffer, len)
+                    logFile:write(dataStr)
                     logFile:flush()
                 end
 
-                -- Parse packet using registered parser
-                local parseSuccess = parse_packet(data, #data)
+                -- Parse packet using fast pointer-based API
+                local parseSuccess = parse_packet_ptr(rawPtr, len)
                 if not parseSuccess then
                     -- Silently ignore unparseable packets
                 end
@@ -215,6 +220,10 @@ local function loadOfflineFile(filepath)
 
         if packetSize and #chunk >= packetSize then
             -- We have enough data for a complete packet, try to parse it
+            -- Use lightuserdata for fast zero-copy parsing
+            -- We can't get lightuserdata from a string easily, so we use string parsing if needed
+            -- but for consistency let's just pass the string (parsePacket overload 1)
+            -- Wait, I'll use parse_packet instead of parse_packet_ptr for strings
             local parseSuccess = parse_packet(chunk, #chunk)
 
             if parseSuccess then
