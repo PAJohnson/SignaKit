@@ -8,6 +8,8 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <windows.h>
+#include <timeapi.h> // For timeBeginPeriod
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #ifndef M_PI
@@ -302,6 +304,7 @@ int main() {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return 1;
     socket_t sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    timeBeginPeriod(1);
 #else
     socket_t sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 #endif
@@ -341,6 +344,7 @@ int main() {
 
 #ifdef _WIN32
     closesocket(sockfd); WSACleanup();
+    timeEndPeriod(1);
 #else
     close(sockfd);
 #endif

@@ -235,6 +235,6 @@ target_include_directories(struct_size_test PRIVATE src)
 
 add_executable(mock_device src/mock_device.cpp)
 target_include_directories(mock_device PRIVATE src)
-target_link_libraries(mock_device PRIVATE ws2_32 wsock32)
+target_link_libraries(mock_device PRIVATE ws2_32 wsock32 winmm)
 # Static linking for portability
 set_target_properties(mock_device PROPERTIES LINK_FLAGS "-static -static-libgcc -static-libstdc++")
