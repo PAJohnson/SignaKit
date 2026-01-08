@@ -147,6 +147,32 @@ if(NOT pffft_POPULATED)
 endif()
 message(STATUS "pffft configured for static linking")
 
+# Fetch stb for image loading (header-only library)
+message(STATUS "Fetching stb for image loading...")
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(stb)
+message(STATUS "stb fetched (header-only)")
+
+# Fetch PCAN-Basic for CAN support (Windows only, headers for build time)
+if(WIN32)
+    message(STATUS "Fetching PCAN-Basic headers for CAN support...")
+    FetchContent_Declare(
+        pcan
+        URL https://www.peak-system.com/fileadmin/media/files/pcan-basic.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_GetProperties(pcan)
+    if(NOT pcan_POPULATED)
+        FetchContent_Populate(pcan)
+    endif()
+    message(STATUS "PCAN-Basic headers fetched")
+endif()
+
+
 # ImGui Sources
 set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui.cpp
@@ -187,6 +213,15 @@ target_include_directories(signakit PRIVATE
     ${SDL2_INCLUDE_DIRS}
     ${LUA_INCLUDE_DIR}
     ${pffft_SOURCE_DIR}
+    ${stb_SOURCE_DIR}
+)
+
+# Add PCAN headers for Windows
+if(WIN32)
+    target_include_directories(signakit PRIVATE ${pcan_SOURCE_DIR}/Include)
+endif()
+
+target_include_directories(signakit PRIVATE
     src
 )
 

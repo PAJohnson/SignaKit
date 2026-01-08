@@ -25,6 +25,16 @@
 
 namespace fs = std::filesystem;
 
+#include "LuaSerialPort.hpp"
+#include "LuaCANSocket.hpp"
+
+// For image buffer updates
+#include <SDL2/SDL_opengl.h>
+#include "stb_image.h"
+
+
+
+
 // Represents a loaded Lua script with metadata
 struct LuaScript {
     std::string name;
@@ -341,6 +351,35 @@ public:
         lua.set_function("create_udp_socket", []() { return std::make_shared<LuaUDPSocket>(); });
         lua.set_function("create_tcp_socket", []() { return std::make_shared<LuaTCPSocket>(); });
 
+#ifdef _WIN32
+        // SerialPort usertype (Windows only)
+        lua.new_usertype<LuaSerialPort>("SerialPort",
+            sol::constructors<LuaSerialPort()>(),
+            "open", &LuaSerialPort::open,
+            "configure", &LuaSerialPort::configure,
+            "send", &LuaSerialPort::send,
+            "receive", &LuaSerialPort::receive,
+            "close", &LuaSerialPort::close,
+            "is_open", &LuaSerialPort::is_open
+        );
+
+        lua.set_function("create_serial_port", []() { return std::make_shared<LuaSerialPort>(); });
+
+        // CANSocket usertype (Windows only, requires PCAN drivers)
+        lua.new_usertype<LuaCANSocket>("CANSocket",
+            sol::constructors<LuaCANSocket()>(),
+            "open", &LuaCANSocket::open,
+            "send", &LuaCANSocket::send,
+            "receive", &LuaCANSocket::receive,
+            "close", &LuaCANSocket::close,
+            "is_open", &LuaCANSocket::is_open,
+            "get_status", &LuaCANSocket::get_status
+        );
+
+        lua.set_function("create_can_socket", []() { return std::make_shared<LuaCANSocket>(); });
+#endif
+
+
         // SharedBuffer usertype (FFI support)
         lua.new_usertype<SharedBuffer>("SharedBuffer",
             sol::constructors<SharedBuffer(size_t)>(),
@@ -502,6 +541,42 @@ public:
                     yield()
                 end
             end
+            
+            -- Async SerialPort helpers (Windows only)
+            function SerialPort:receive_async(max_size)
+                while true do
+                    local data, err = self:receive(max_size or 65536)
+                    if data and #data > 0 then
+                        return data, err
+                    end
+                    if err ~= "timeout" then
+                        return nil, err
+                    end
+                    yield()
+                end
+            end
+
+            function SerialPort:send_async(data)
+                while true do
+                    local n, err = self:send(data)
+                    if n >= 0 then return n, err end
+                    yield()
+                end
+            end
+            
+            -- Async CANSocket helpers (Windows only)
+            function CANSocket:receive_async()
+                while true do
+                    local timestamp, id, data, ext, rtr, err = self:receive()
+                    if data and #data > 0 then
+                        return timestamp, id, data, ext, rtr
+                    end
+                    if err ~= "timeout" then
+                        return nil, nil, nil, nil, nil, err
+                    end
+                    yield()
+                end
+            end
         )");
 
         if (!scriptResult.valid()) {
@@ -607,6 +682,93 @@ public:
             }
             ImGuiFileDialog::Instance()->Close();
             return sol::lua_nil;
+        });
+
+        // Image window content control API (find windows by title)
+        lua.set_function("set_image_file", [this](const std::string& window_title, const std::string& file_path) -> bool {
+            if (currentUIPlotState == nullptr) return false;
+            
+            // Find window by title
+            for (auto& img : currentUIPlotState->activeImageWindows) {
+                if (img.title == window_title) {
+                    // Clear old texture if exists
+                    if (img.textureID != 0) {
+                        extern void DeleteTexture(unsigned int);
+                        DeleteTexture(img.textureID);
+                        img.textureID = 0;
+                    }
+                    
+                    // Load new image
+                    img.filePath = file_path;
+                    extern unsigned int LoadImageToTexture(const std::string&, int*, int*);
+                    img.textureID = LoadImageToTexture(img.filePath, &img.width, &img.height);
+                    
+                    return (img.textureID != 0);
+                }
+            }
+            return false; // Window not found
+        });
+
+        lua.set_function("update_image_buffer", [this](const std::string& window_title, 
+                                                        const std::string& image_data,
+                                                        int width, int height,
+                                                        sol::optional<std::string> format) -> bool {
+            if (currentUIPlotState == nullptr) return false;
+            
+            // Find window by title
+            for (auto& img : currentUIPlotState->activeImageWindows) {
+                if (img.title == window_title) {
+                    // Decode image data (JPEG or other format) into RGBA using stb_image
+                    int decoded_width, decoded_height, channels;
+                    unsigned char* rgba_data = stbi_load_from_memory(
+                        (const unsigned char*)image_data.data(),
+                        image_data.size(),
+                        &decoded_width, &decoded_height, &channels,
+                        4  // Force RGBA
+                    );
+                    
+                    if (!rgba_data) {
+                        printf("[ImageWindow] Failed to decode image data\\n");
+                        return false;
+                    }
+                    
+                    // Use OpenGL functions (GL constants already defined in SDL_opengl.h)
+                    // Create or update texture
+                    if (img.textureID == 0) {
+                        // Create new texture
+                        unsigned int textureID;
+                        glGenTextures(1, &textureID);
+                        glBindTexture(GL_TEXTURE_2D, textureID);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, decoded_width, decoded_height, 
+                                    0, GL_RGBA, GL_UNSIGNED_BYTE, rgba_data);
+                        img.textureID = textureID;
+                    } else {
+                        // Update existing texture
+                        glBindTexture(GL_TEXTURE_2D, img.textureID);
+                        
+                        // If dimensions changed, reallocate
+                        if (decoded_width != img.width || decoded_height != img.height) {
+                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, decoded_width, decoded_height,
+                                        0, GL_RGBA, GL_UNSIGNED_BYTE, rgba_data);
+                        } else {
+                            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, decoded_width, decoded_height,
+                                           GL_RGBA, GL_UNSIGNED_BYTE, rgba_data);
+                        }
+                    }
+                    
+                    img.width = decoded_width;
+                    img.height = decoded_height;
+                    img.filePath = ""; // Clear file path since this is from buffer
+                    
+                    stbi_image_free(rgba_data);
+                    return true;
+                }
+            }
+            return false; // Window not found
         });
     }
 

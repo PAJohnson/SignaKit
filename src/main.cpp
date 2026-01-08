@@ -89,6 +89,10 @@ static auto lastFrameTime = std::chrono::high_resolution_clock::now();
 // Include control element rendering functions (Tier 4)
 #include "control_rendering.hpp"
 
+// Include image window rendering
+#include "image_rendering.hpp"
+
+
 // -------------------------------------------------------------------------
 // NETWORK HANDLING
 // -------------------------------------------------------------------------
@@ -264,6 +268,11 @@ void MainLoopStep(void *arg) {
   RenderTextInputControls(uiPlotState, menuBarHeight);
 
   // ---------------------------------------------------------
+  // UI: IMAGE WINDOWS
+  // ---------------------------------------------------------
+  RenderImageWindows(uiPlotState, menuBarHeight);
+
+  // ---------------------------------------------------------
   // UI: TIME SLIDER (Offline Mode Only)
   // ---------------------------------------------------------
   RenderTimeSlider();
@@ -305,6 +314,11 @@ void MainLoopStep(void *arg) {
       std::remove_if(uiPlotState.activeSpectrograms.begin(), uiPlotState.activeSpectrograms.end(),
                      [](const SpectrogramWindow &s) { return !s.isOpen; }),
       uiPlotState.activeSpectrograms.end());
+
+  uiPlotState.activeImageWindows.erase(
+      std::remove_if(uiPlotState.activeImageWindows.begin(), uiPlotState.activeImageWindows.end(),
+                     [](const ImageWindow &img) { return !img.isOpen; }),
+      uiPlotState.activeImageWindows.end());
 
   uiPlotState.activeButtons.erase(
       std::remove_if(uiPlotState.activeButtons.begin(), uiPlotState.activeButtons.end(),

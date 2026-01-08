@@ -287,6 +287,12 @@ inline void RenderSignalBrowser(UIPlotState& uiPlotState, float menuBarHeight) {
       newSpectrogram.signalName = ""; // Empty initially
       uiPlotState.activeSpectrograms.push_back(newSpectrogram);
     }
+    if (ImGui::MenuItem("Image Display")) {
+      ImageWindow newImageWindow;
+      newImageWindow.id = uiPlotState.nextImageWindowId++;
+      newImageWindow.title = "Image " + std::to_string(newImageWindow.id);
+      uiPlotState.activeImageWindows.push_back(newImageWindow);
+    }
     ImGui::Separator();
     // Tier 4: Control Elements
     if (ImGui::MenuItem("Button")) {

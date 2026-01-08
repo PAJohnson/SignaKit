@@ -38,6 +38,10 @@ struct UIPlotState {
   std::vector<SpectrogramWindow> activeSpectrograms;
   int nextSpectrogramId = 1;
 
+  // Image/Video windows
+  std::vector<ImageWindow> activeImageWindows;
+  int nextImageWindowId = 1;
+
   // Control elements (Tier 4)
   std::vector<ButtonControl> activeButtons;
   int nextButtonId = 1;

@@ -131,6 +131,29 @@ struct SpectrogramWindow {
 };
 
 // -------------------------------------------------------------------------
+// IMAGE WINDOW DATA STRUCTURE
+// -------------------------------------------------------------------------
+// Represents an image/video display window with OpenGL texture support
+
+struct ImageWindow {
+  int id;
+  std::string title;
+  bool isOpen = true;
+  
+  // OpenGL texture state
+  unsigned int textureID = 0;           // OpenGL texture handle (GLuint)
+  int width = 0;
+  int height = 0;
+  
+  // Display options
+  bool fitToWindow = true;              // Fit image to window vs actual size
+  std::string filePath;                 // Source file path (if loaded from file)
+  
+  // Cleanup OpenGL texture on destruction
+  ~ImageWindow();
+};
+
+// -------------------------------------------------------------------------
 // CONTROL ELEMENT DATA STRUCTURES (Tier 4)
 // -------------------------------------------------------------------------
 // These structures represent interactive GUI control elements that expose
