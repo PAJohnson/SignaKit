@@ -19,6 +19,7 @@
 
 // Tier 5: sockpp for network I/O
 #include <sockpp/udp_socket.h>
+#include <sockpp/tcp_connector.h>
 #include <sockpp/inet_address.h>
 #include <sockpp/exception.h>
 
@@ -64,6 +65,9 @@ public:
                 return false;
             }
             is_bound = true;
+
+            // Set non-blocking by default
+            socket.set_non_blocking(true);
             
             // Increase receive buffer to handle bursts and GUI stalls (1MB)
             int bufSize = 1024 * 1024;
@@ -162,6 +166,131 @@ public:
     }
 };
 
+// Tier 5: Lua-accessible TCP socket wrapper using sockpp
+class LuaTCPSocket {
+private:
+    sockpp::tcp_connector socket;
+
+public:
+    LuaTCPSocket() {
+        // TCP sockets are non-blocking by default in this framework
+        socket.set_non_blocking(true);
+    }
+
+    // Connect to remote address and port
+    bool connect(const std::string& host, int port) {
+        try {
+            sockpp::inet_address addr(host, static_cast<in_port_t>(port));
+            if (!socket.connect(addr)) {
+                int err = socket.last_error();
+                #ifdef _WIN32
+                    if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
+                        return true; // Connection in progress
+                    }
+                #else
+                    if (err == EINPROGRESS) {
+                        return true; // Connection in progress
+                    }
+                #endif
+                printf("[LuaTCPSocket] Failed to connect to %s:%d - %s\n",
+                       host.c_str(), port, socket.last_error_str().c_str());
+                return false;
+            }
+            return true;
+        } catch (const std::exception& e) {
+            printf("[LuaTCPSocket] Exception connecting: %s\n", e.what());
+            return false;
+        }
+    }
+
+    // Send data
+    std::tuple<int, std::string> send(const std::string& data) {
+        ssize_t n = socket.write(data.data(), data.size());
+        if (n >= 0) {
+            return std::make_tuple((int)n, "");
+        } else {
+            return std::make_tuple(-1, socket.last_error_str());
+        }
+    }
+
+    // Receive data
+    std::tuple<std::string, std::string> receive(int max_size) {
+        std::vector<char> buffer(max_size);
+        ssize_t n = socket.read(buffer.data(), buffer.size());
+
+        if (n > 0) {
+            return std::make_tuple(std::string(buffer.data(), n), "");
+        } else if (n == 0) {
+            return std::make_tuple("", "closed");
+        } else {
+            int err = socket.last_error();
+            #ifdef _WIN32
+                if (err == WSAEWOULDBLOCK) {
+                    return std::make_tuple("", "timeout");
+                }
+            #else
+                if (err == EAGAIN || err == EWOULDBLOCK) {
+                    return std::make_tuple("", "timeout");
+                }
+            #endif
+            return std::make_tuple("", socket.last_error_str());
+        }
+    }
+
+    // Receive data directly into a memory buffer (Zero-Copy for FFI)
+    std::tuple<int, std::string> receive_ptr(void* ptr, int max_size) {
+        if (!ptr) {
+            return std::make_tuple(-1, "null pointer");
+        }
+
+        ssize_t n = socket.read(ptr, max_size);
+
+        if (n > 0) {
+            return std::make_tuple((int)n, "");
+        } else if (n == 0) {
+            return std::make_tuple(0, "closed");
+        } else {
+            int err = socket.last_error();
+            #ifdef _WIN32
+                if (err == WSAEWOULDBLOCK) {
+                    return std::make_tuple(0, "timeout"); 
+                }
+            #else
+                if (err == EAGAIN || err == EWOULDBLOCK) {
+                    return std::make_tuple(0, "timeout");
+                }
+            #endif
+            return std::make_tuple(-1, socket.last_error_str());
+        }
+    }
+
+    // Set non-blocking mode
+    bool set_non_blocking(bool enable) {
+        if (!socket.set_non_blocking(enable)) {
+            printf("[LuaTCPSocket] Failed to set non-blocking mode: %s\n",
+                   socket.last_error_str().c_str());
+            return false;
+        }
+        return true;
+    }
+
+    // Close socket
+    void close() {
+        socket.close();
+    }
+
+    // Check if socket is open/connected
+    bool is_open() const {
+        return socket.is_open();
+    }
+    
+    bool is_connected() const {
+        // For TCP, we can check if it's connected by trying to get peer address
+        // or using sockpp's internal state if available.
+        return socket.is_open(); // Basic check
+    }
+};
+
 class LuaScriptManager {
 private:
     // Tier 5: Socket library initializer (must be created before any sockets)
@@ -196,7 +325,21 @@ public:
             "is_open", &LuaUDPSocket::is_open
         );
 
+        // TCPSocket usertype
+        lua.new_usertype<LuaTCPSocket>("TCPSocket",
+            sol::constructors<LuaTCPSocket()>(),
+            "connect", &LuaTCPSocket::connect,
+            "send", &LuaTCPSocket::send,
+            "receive", &LuaTCPSocket::receive,
+            "receive_ptr", &LuaTCPSocket::receive_ptr,
+            "set_non_blocking", &LuaTCPSocket::set_non_blocking,
+            "close", &LuaTCPSocket::close,
+            "is_open", &LuaTCPSocket::is_open,
+            "is_connected", &LuaTCPSocket::is_connected
+        );
+
         lua.set_function("create_udp_socket", []() { return std::make_shared<LuaUDPSocket>(); });
+        lua.set_function("create_tcp_socket", []() { return std::make_shared<LuaTCPSocket>(); });
 
         // SharedBuffer usertype (FFI support)
         lua.new_usertype<SharedBuffer>("SharedBuffer",
@@ -300,6 +443,58 @@ public:
                     local len, err = self:receive_ptr(ptr, max_size or 65536)
                     if len > 0 then
                         return len, err
+                    end
+                    if err ~= "timeout" then
+                        return -1, err
+                    end
+                    yield()
+                end
+            end
+
+            -- Async TCP helpers
+            function TCPSocket:connect_async(host, port)
+                local success = self:connect(host, port)
+                if not success then return false, "failed to initiate" end
+                
+                while not self:is_connected() do
+                    yield()
+                end
+                return true
+            end
+
+            function TCPSocket:send_async(data)
+                while true do
+                    local n, err = self:send(data)
+                    if n >= 0 then return n, err end
+                    -- For TCP, wait and retry if needed (though usually send is non-blocking with buffer)
+                    yield()
+                end
+            end
+
+            function TCPSocket:receive_async(max_size)
+                while true do
+                    local data, err = self:receive(max_size or 65536)
+                    if data and #data > 0 then
+                        return data, err
+                    end
+                    if err == "closed" then
+                        return nil, "closed"
+                    end
+                    if err ~= "timeout" then
+                        return nil, err
+                    end
+                    yield()
+                end
+            end
+
+            function TCPSocket:receive_ptr_async(ptr, max_size)
+                while true do
+                    local len, err = self:receive_ptr(ptr, max_size or 65536)
+                    if len > 0 then
+                        return len, err
+                    end
+                    if err == "closed" then
+                        return 0, "closed"
                     end
                     if err ~= "timeout" then
                         return -1, err
