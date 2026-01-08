@@ -431,18 +431,20 @@ int main(int, char **) {
 
   SDL_Event event;
   while (appRunning) {
-    // Process all pending events immediately
-    while (SDL_PollEvent(&event)) {
-        ImGui_ImplSDL2_ProcessEvent(&event);
-        if (event.type == SDL_QUIT)
-            appRunning = false;
-        
-        // Handle window close events for individual plots
-        if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) {
-            if (SDL_GetWindowFromID(event.window.windowID) == window) {
+    // Wait for an event, but timeout after 1ms to allow Lua/Network processing.
+    // Combined with timeBeginPeriod(1), this prevents 100% CPU usage while maintaining low latency.
+    if (SDL_WaitEventTimeout(&event, 16)) {
+        do {
+            ImGui_ImplSDL2_ProcessEvent(&event);
+            if (event.type == SDL_QUIT)
                 appRunning = false;
+            
+            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) {
+                if (SDL_GetWindowFromID(event.window.windowID) == window) {
+                    appRunning = false;
+                }
             }
-        }
+        } while (SDL_PollEvent(&event)); // Drain remaining events in this frame
     }
 
     MainLoopStep(&ctx);
