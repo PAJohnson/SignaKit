@@ -29,7 +29,6 @@ namespace fs = std::filesystem;
 
 #include "LuaSerialPort.hpp"
 #include "LuaCANSocket.hpp"
-#include "LuaThreadManager.hpp"
 
 // For image buffer updates
 #include <SDL2/SDL_opengl.h>
@@ -310,15 +309,8 @@ private:
     // static inline sockpp::socket_initializer sockInit;
 
 public:
-    // Forward declaration for thread manager
-    friend class LuaWorkerThread;
-
-    // Thread manager for worker threads
-    LuaThreadManager thread_manager;
-
     LuaScriptManager() {
         sockpp::initialize();
-        thread_manager.setScriptManager(this);
         initializeLuaState();
     }
 
@@ -409,20 +401,6 @@ public:
         lua.set_function("yield", sol::yielding([](sol::variadic_args args) {
             return args;
         }));
-
-        // spawn_thread(function) - starts a new OS thread with isolated Lua state
-        // DEPRECATED: Passing functions directly causes global reference issues
-        lua.set_function("spawn_thread", [this](sol::protected_function func) -> int {
-            printf("[LuaScriptManager] Warning: spawn_thread(function) is deprecated, use spawn_thread_file() instead\n");
-            return thread_manager.spawnThread(func);
-        });
-
-        // spawn_thread_file(filepath) - recommended way to spawn threads
-        // The file is loaded and executed in the worker thread's Lua state
-        // This gives the worker thread access to all functions and definitions in the script
-        lua.set_function("spawn_thread_file", [this](const std::string& filepath) -> int {
-            return thread_manager.spawnThreadFile(filepath);
-        });
 
         // Expose the signal registry API
         exposeSignalAPI();
@@ -1023,7 +1001,6 @@ public:
 
     void setAppRunningPtr(std::atomic<bool>* ptr) {
         appRunningPtr = ptr;
-        thread_manager.setAppRunningPtr(ptr);
     }
 
     // Set a default signal registry to be used when no frame/packet context is active (e.g. at script load)
@@ -1032,27 +1009,17 @@ public:
     }
 
     void stopAllLuaThreads() {
-        thread_manager.stopAllThreads();
-    }
+        printf("[LuaScriptManager] Stopping all Lua threads...\n");
+        threadsRunning = false;
 
-    // Update UI snapshot for worker threads (call each frame before executing callbacks)
-    void updateUISnapshot(const UIPlotState& ui_state) {
-        thread_manager.updateUISnapshot(ui_state);
-    }
-
-    // Drain signal queues from worker threads (call at start of frame)
-    void drainSignalQueues(std::map<std::string, Signal>& signal_registry, PlaybackMode default_mode) {
-        thread_manager.drainSignalQueues(signal_registry, default_mode);
-    }
-
-    // Process UI events from worker threads (call each frame)
-    void processUIEvents(UIPlotState& ui_state) {
-        thread_manager.processUIEvents(ui_state);
-    }
-
-    // Get worker thread count
-    size_t getWorkerThreadCount() const {
-        return thread_manager.getThreadCount();
+        std::lock_guard<std::mutex> lock(threadVectorMutex);
+        for (auto& luaThread : luaThreads) {
+            if (luaThread->thread.joinable()) {
+                luaThread->thread.join();
+            }
+        }
+        luaThreads.clear();
+        printf("[LuaScriptManager] All Lua threads stopped\n");
     }
 
     // Clear the fast access cache (call when registry is cleared or pointers might be invalid)
@@ -1569,6 +1536,3 @@ private:
         // Add other essential buffer functions as needed
     }
 };
-
-// Include thread bindings implementation (must come after LuaScriptManager definition)
-#include "LuaThreadBindings.hpp"

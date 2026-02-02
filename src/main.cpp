@@ -192,7 +192,21 @@ void MainLoopStep(void *arg) {
   // Lock data while we render to prevent iterator invalidation
   std::lock_guard<std::mutex> lock(stateMutex);
 
-  // Tier 3: Execute frame callbacks
+  // -------------------------------------------------------------------------
+  // MULTI-THREADED DATA FLOW
+  // -------------------------------------------------------------------------
+  // 1. Drain signal queues from Lua worker threads → update signalRegistry
+  luaScriptManager.drainSignalQueues(signalRegistry, currentPlaybackMode);
+
+  // 2. Process UI events from Lua worker threads → update uiPlotState
+  luaScriptManager.processUIEvents(uiPlotState);
+
+  // 3. Update UI state snapshot for Lua worker threads to read
+  luaScriptManager.updateUISnapshot(uiPlotState);
+
+  // -------------------------------------------------------------------------
+  // Tier 3: Execute frame callbacks (main thread Lua coroutines)
+  // -------------------------------------------------------------------------
   frameNumber++;
   auto currentFrameTime = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> elapsed = currentFrameTime - lastFrameTime;

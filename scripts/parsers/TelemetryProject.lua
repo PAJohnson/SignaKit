@@ -618,15 +618,32 @@ local function parse_telemetry_string(buffer, len)
     return parse_telemetry_packet(temp_buf, len)
 end
 
--- ==================== MAIN ASYNC LOOP ====================
+-- ==================== MAIN THREAD LOOP ====================
+-- This loop runs in a dedicated OS thread for high-performance data processing
+-- The main thread spawns a worker thread that re-executes this file, giving it access to
+-- all FFI definitions, helper functions, and the signal cache.
 
-spawn(function()
-    print("[TelemetryProject] Main async loop started")
+-- Main thread: spawn worker thread
+if not IS_WORKER_THREAD then
+    print("[TelemetryProject] Main thread: spawning worker thread")
+    spawn_thread_file("scripts/parsers/TelemetryProject.lua")
+    print("[TelemetryProject] Initialized successfully (worker thread spawned)")
+    return -- Exit main thread execution here
+end
 
-    local _keepAlive = sharedBuffer
+-- Worker thread: spawn coroutine with main loop
+print("[TelemetryProject] Worker thread started (THREAD_ID=" .. tostring(THREAD_ID) .. ")")
+
+local _keepAlive = sharedBuffer
+
+spawn_thread(function()
+    print("[TelemetryProject] Worker coroutine started")
 
     while is_app_running() do
-        if isOnlineMode() then
+        local online = isOnlineMode()
+        print(string.format("[TelemetryProject] Loop iteration - online=%s, running=%s", tostring(online), tostring(is_app_running())))
+
+        if online then
             if offlineLoadedFilePath ~= "" then
                 print("[TelemetryProject] Switching to online mode")
                 set_default_signal_mode("online")
@@ -645,7 +662,8 @@ spawn(function()
             end
 
             if udpConnected and udpSocket then
-                local len, err = udpSocket:receive_ptr_async(rawPtr, RECV_BUFFER_SIZE)
+                -- Non-blocking receive (returns immediately)
+                local len, err = udpSocket:receive_ptr(rawPtr, RECV_BUFFER_SIZE)
 
                 if len > 0 then
                     packetsReceived = packetsReceived + 1
@@ -672,10 +690,12 @@ spawn(function()
                     print("[TelemetryProject] Socket error: " .. tostring(err))
                     disconnectOnline()
                 end
-            else
-                yield()
             end
+
+            -- Small sleep to avoid spinning CPU when no data
+            sleep_ms(1)
         else
+            -- Offline mode
             if udpConnected then
                 disconnectOnline()
             end
@@ -696,9 +716,11 @@ spawn(function()
                 fileDialogOpen = true
             end
 
-            yield()
+            -- Sleep in offline mode
+            sleep_ms(10)
         end
 
+        -- Stats printing
         local currentTime = get_time_seconds()
         if currentTime - lastStatsTime >= 5.0 and packetsReceived > 0 then
             local elapsed = currentTime - startTime
@@ -708,6 +730,6 @@ spawn(function()
             lastStatsTime = currentTime
         end
     end
-end)
 
-print("[TelemetryProject] Initialized successfully")
+    print("[TelemetryProject] Worker coroutine exiting")
+end)
