@@ -3,8 +3,7 @@
 #include "imgui.h"
 #include "plot_types.hpp"
 #include "ui_state.hpp"
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_opengl.h>
+#include <d3d11.h>
 #include <string>
 #include <cstdio>
 
@@ -12,64 +11,116 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+// External access to D3D11 globals
+extern ID3D11Device* g_pd3dDevice;
+extern ID3D11DeviceContext* g_pd3dDeviceContext;
+
 // -------------------------------------------------------------------------
 // TEXTURE MANAGEMENT
 // -------------------------------------------------------------------------
 
-// Load image from file and create OpenGL texture
-// Returns texture ID (0 on failure)
+// Load image from file and create DX11 ShaderResourceView
+// Returns pointer to SRV (as uintptr_t) or 0 on failure
 unsigned int LoadImageToTexture(const std::string& filePath, int* out_width, int* out_height) {
+    if (!g_pd3dDevice) return 0;
+
     // Load image using stb_image
     int width, height, channels;
     unsigned char* data = stbi_load(filePath.c_str(), &width, &height, &channels, 4); // Force RGBA
     
     if (!data) {
-        printf("[ImageWindow] Failed to load image: %s\\n", filePath.c_str());
+        printf("[ImageWindow] Failed to load image: %s\n", filePath.c_str());
         return 0;
     }
     
-    // Create OpenGL texture
-    GLuint textureID;
-    glGenTextures(1, &textureID);
-    glBindTexture(GL_TEXTURE_2D, textureID);
-    
-    // Set texture parameters
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    
-    // Upload image data to GPU
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    // Create DX11 Texture
+    D3D11_TEXTURE2D_DESC desc;
+    ZeroMemory(&desc, sizeof(desc));
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+
+    D3D11_SUBRESOURCE_DATA subResource;
+    subResource.pSysMem = data;
+    subResource.SysMemPitch = desc.Width * 4;
+    subResource.SysMemSlicePitch = 0;
+
+    ID3D11Texture2D* pTexture = nullptr;
+    HRESULT hr = g_pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
     
     // Free image data from system memory
     stbi_image_free(data);
-    
+
+    if (FAILED(hr)) {
+        printf("[ImageWindow] Failed to create texture for %s\n", filePath.c_str());
+        return 0;
+    }
+
+    // Create Shader Resource View
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+    ZeroMemory(&srvDesc, sizeof(srvDesc));
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = desc.MipLevels;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+
+    ID3D11ShaderResourceView* pTextureView = nullptr;
+    g_pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, &pTextureView);
+    pTexture->Release(); // SRV holds a reference
+
+    if (!pTextureView) {
+        printf("[ImageWindow] Failed to create SRV for %s\n", filePath.c_str());
+        return 0;
+    }
+
     *out_width = width;
     *out_height = height;
     
-    printf("[ImageWindow] Loaded texture %u from %s (%dx%d)\\n", 
-           textureID, filePath.c_str(), width, height);
+    printf("[ImageWindow] Loaded texture %p from %s (%dx%d)\n", 
+           pTextureView, filePath.c_str(), width, height);
     
-    return textureID;
+    return (unsigned int)(uintptr_t)pTextureView;
 }
 
 // Update existing texture with raw RGBA data (for video streams)
+// Note: This requires the texture to be created with D3D11_USAGE_DEFAULT or D3D11_USAGE_DYNAMIC
+// ImGui examples usually handle this by creating a new texture if size changes, 
+// or using UpdateSubresource for same size.
 bool UpdateTextureData(unsigned int textureID, const void* data, int width, int height) {
-    if (textureID == 0 || !data) {
+    if (textureID == 0 || !data || !g_pd3dDeviceContext) {
         return false;
     }
     
-    glBindTexture(GL_TEXTURE_2D, textureID);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    ID3D11ShaderResourceView* pTextureView = (ID3D11ShaderResourceView*)(uintptr_t)textureID;
     
+    // Get the underlying resource
+    ID3D11Resource* pResource = nullptr;
+    pTextureView->GetResource(&pResource);
+    if (!pResource) return false;
+
+    // Check dimensions (optional, but good safety)
+    // For simplicity, we assume the caller matches dimensions or we might need to recreate.
+    // D3D11 UpdateSubresource requires matching size conceptually, but it just overwrites memory.
+    // If width/height changed, we really should destroy and recreate.
+    
+    // For now, assume size matches.
+    g_pd3dDeviceContext->UpdateSubresource(pResource, 0, nullptr, data, width * 4, 0);
+
+    pResource->Release();
     return true;
 }
 
-// Delete OpenGL texture
+// Delete DX11 texture (release SRV)
 void DeleteTexture(unsigned int textureID) {
     if (textureID != 0) {
-        glDeleteTextures(1, &textureID);
+        ID3D11ShaderResourceView* pTextureView = (ID3D11ShaderResourceView*)(uintptr_t)textureID;
+        pTextureView->Release();
     }
 }
 
@@ -115,7 +166,7 @@ void RenderImageWindows(UIPlotState& uiPlotState, float menuBarHeight) {
         // Display image
         if (imageWindow.textureID != 0 && imageWindow.width > 0 && imageWindow.height > 0) {
             // Calculate display size
-            ImVec2 imageSize(imageWindow.width, imageWindow.height);
+            ImVec2 imageSize((float)imageWindow.width, (float)imageWindow.height);
             
             if (imageWindow.fitToWindow) {
                 // Fit to available content region while maintaining aspect ratio
@@ -133,8 +184,8 @@ void RenderImageWindows(UIPlotState& uiPlotState, float menuBarHeight) {
                 }
             }
             
-            // Display the texture
-            ImGui::Image((ImTextureID)(intptr_t)imageWindow.textureID, imageSize);
+            // Display the texture (cast to void* for ImGui)
+            ImGui::Image((void*)(uintptr_t)imageWindow.textureID, imageSize);
             
             // Show image info on hover
             if (ImGui::IsItemHovered()) {

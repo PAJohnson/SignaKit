@@ -1,14 +1,16 @@
 #include "imgui.h"
-#include "imgui_impl_opengl3.h"
-#include "imgui_impl_sdl2.h"
+#include "imgui_impl_win32.h"
+#include "imgui_impl_dx11.h"
+#include <d3d11.h>
+#include <tchar.h>
 #include "implot.h"
 #include "ImGuiFileDialog.h"
-#include <SDL.h>
-#include <SDL_opengl.h>
-#include <algorithm> // For std::find, std::sort
+
+// Standard Library Includes
+#include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath> // For FFT functions
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -28,20 +30,17 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// Network Includes (now handled in Lua via DataSource.lua)
-
-// DPI Awareness
+// Windows Specific
 #include <windows.h>
 #include <ShellScalingApi.h>
-#include <timeapi.h> // For timeBeginPeriod
+#include <timeapi.h>
 
+// Application Includes
 #include "types.hpp"
 #include "LuaScriptManager.hpp"
 #include "plot_types.hpp"
 #include "signal_processing.hpp"
 #include "ui_state.hpp"
-
-// Note: plot_rendering.hpp is included later, after global state definitions
 
 // -------------------------------------------------------------------------
 // GLOBAL STATE
@@ -52,14 +51,12 @@ std::atomic<bool> appRunning(true);
 // Playback mode state
 PlaybackMode currentPlaybackMode = PlaybackMode::ONLINE;
 
-// Parser selection removed - Lua scripts now handle parsing directly
-
 // Offline playback state
 struct OfflinePlaybackState {
   double minTime = 0.0;
   double maxTime = 0.0;
   double currentWindowStart = 0.0;
-  double windowWidth = 10.0;  // Will be set to full duration on file load
+  double windowWidth = 10.0;
   bool fileLoaded = false;
   std::string loadedFilePath;
 } offlineState;
@@ -70,40 +67,42 @@ std::map<std::string, Signal> signalRegistry;
 // Lua Script Manager
 LuaScriptManager luaScriptManager;
 
-// UI plot state (consolidates all plot window vectors and ID counters)
+// UI plot state
 UIPlotState uiPlotState;
 
 // Tier 3: Frame tracking for Lua callbacks
 static uint64_t frameNumber = 0;
 static auto lastFrameTime = std::chrono::high_resolution_clock::now();
 
-// Include layout persistence functions (must come after OfflinePlaybackState definition)
+// Include application logic (order matters due to dependencies)
 #include "layout_persistence.hpp"
-
-// Include plot rendering functions (must come after all global state definitions)
 #include "plot_rendering.hpp"
-
-// Include control element rendering functions (Tier 4)
 #include "control_rendering.hpp"
-
-// Include image window rendering
 #include "image_rendering.hpp"
 
+// DirectX 11 Globals
+ID3D11Device*            g_pd3dDevice = nullptr;
+ID3D11DeviceContext*     g_pd3dDeviceContext = nullptr;
+static IDXGISwapChain*          g_pSwapChain = nullptr;
+static UINT                     g_ResizeWidth = 0, g_ResizeHeight = 0;
+static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
+
+// Forward Declarations
+bool CreateDeviceD3D(HWND hWnd);
+void CleanupDeviceD3D();
+void CreateRenderTarget();
+void CleanupRenderTarget();
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // -------------------------------------------------------------------------
-// NETWORK HANDLING
+// STYLING
 // -------------------------------------------------------------------------
-// All network I/O is now handled in Lua via scripts/io/UDPDataSink.lua
-// which runs as an on_frame() callback at ~60 FPS with non-blocking sockets.
-// This eliminates the need for a separate C++ network thread.
-
-//
 void SetupImGuiStyle() {
   // 1. Theme and Colors
   ImGui::StyleColorsDark();
   ImGuiStyle &style = ImGui::GetStyle();
 
-  // Rounding - makes it look less like Windows 95
+  // Rounding
   style.WindowRounding = 5.0f;
   style.FrameRounding = 5.0f;
   style.PopupRounding = 5.0f;
@@ -116,7 +115,7 @@ void SetupImGuiStyle() {
   style.FramePadding = ImVec2(5, 5);
   style.ItemSpacing = ImVec2(10, 8);
 
-  // Color Tweaks (optional: deepens the background, makes headers pop)
+  // Color Tweaks
   ImVec4 *colors = style.Colors;
   colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
   colors[ImGuiCol_Header] = ImVec4(0.20f, 0.25f, 0.30f, 1.00f);
@@ -128,356 +127,279 @@ void SetupImGuiStyle() {
 
   // 2. ImPlot Styling
   ImPlotStyle &plotStyle = ImPlot::GetStyle();
-  plotStyle.LineWeight = 2.0f; // Make lines thicker and easier to see
+  plotStyle.LineWeight = 2.0f;
   plotStyle.MarkerSize = 4.0f;
-}
-
-// -------------------------------------------------------------------------
-// MAIN LOOP CONTEXT
-// -------------------------------------------------------------------------
-struct GlobalContext {
-  SDL_Window *window;
-  SDL_GLContext gl_context;
-};
-
-void MainLoopStep(void *arg) {
-  GlobalContext *ctx = (GlobalContext *)arg;
-  ImGuiIO &io = ImGui::GetIO();
-
-  if (!appRunning) {
-    return;
-  }
-
-  // Handle pending layout load (deferred for INI settings safety)
-  if (!uiPlotState.pendingLoadFilename.empty()) {
-      LayoutData data;
-      if (LoadLayout(uiPlotState.pendingLoadFilename, data)) {
-          // 1. Apply ImGui Settings (Before NewFrame)
-          if (!data.imguiSettings.empty()) {
-               ImGui::LoadIniSettingsFromMemory(data.imguiSettings.c_str(), data.imguiSettings.size());
-          }
-          
-          // 2. Apply UI State
-          uiPlotState.activePlots = data.plots;
-          uiPlotState.nextPlotId = data.nextPlotId;
-          uiPlotState.activeReadoutBoxes = data.readouts;
-          uiPlotState.nextReadoutBoxId = data.nextReadoutId;
-          uiPlotState.activeXYPlots = data.xyPlots;
-          uiPlotState.nextXYPlotId = data.nextXYPlotId;
-          uiPlotState.activeHistograms = data.histograms;
-          uiPlotState.nextHistogramId = data.nextHistogramId;
-          uiPlotState.activeFFTs = data.ffts;
-          uiPlotState.nextFFTId = data.nextFFTId;
-          uiPlotState.activeSpectrograms = data.spectrograms;
-          uiPlotState.nextSpectrogramId = data.nextSpectrogramId;
-          uiPlotState.activeButtons = data.buttons;
-          uiPlotState.nextButtonId = data.nextButtonId;
-          uiPlotState.activeToggles = data.toggles;
-          uiPlotState.nextToggleId = data.nextToggleId;
-          uiPlotState.activeTextInputs = data.textInputs;
-          uiPlotState.nextTextInputId = data.nextTextInputId;
-          
-          uiPlotState.nextTextInputId = data.nextTextInputId;
-          
-          uiPlotState.editMode = data.editMode;
-          uiPlotState.managedByImGui = !data.imguiSettings.empty();
-      }
-      uiPlotState.pendingLoadFilename.clear();
-  }
-
-  ImGui_ImplOpenGL3_NewFrame();
-  ImGui_ImplSDL2_NewFrame();
-  ImGui::NewFrame();
-
-  // Lock data while we render to prevent iterator invalidation
-  std::lock_guard<std::mutex> lock(stateMutex);
-
-  // Tier 3: Execute frame callbacks
-  frameNumber++;
-  auto currentFrameTime = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double> elapsed = currentFrameTime - lastFrameTime;
-  double deltaTime = elapsed.count();
-  lastFrameTime = currentFrameTime;
-
-  // Count total active plots
-  int totalPlots = (int)(uiPlotState.activePlots.size() +
-                        uiPlotState.activeReadoutBoxes.size() +
-                        uiPlotState.activeXYPlots.size() +
-                        uiPlotState.activeHistograms.size() +
-                        uiPlotState.activeFFTs.size() +
-                        uiPlotState.activeSpectrograms.size());
-
-  luaScriptManager.executeFrameCallbacks(signalRegistry, frameNumber, deltaTime, totalPlots, &uiPlotState);
-
-  // Get menu bar height
-  float menuBarHeight = ImGui::GetFrameHeight();
-
-  // ---------------------------------------------------------
-  // UI: MENU BAR
-  // ---------------------------------------------------------
-  RenderMenuBar(uiPlotState);
-
-  // ---------------------------------------------------------
-  // UI: LEFT PANEL (Signal Browser)
-  // ---------------------------------------------------------
-  RenderSignalBrowser(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: TIME-BASED PLOTS
-  // ---------------------------------------------------------
-  RenderTimePlots(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: READOUT BOXES
-  // ---------------------------------------------------------
-  RenderReadoutBoxes(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: X/Y PLOTS
-  // ---------------------------------------------------------
-  RenderXYPlots(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: HISTOGRAMS
-  // ---------------------------------------------------------
-  RenderHistograms(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: FFT PLOTS
-  // ---------------------------------------------------------
-  RenderFFTPlots(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: SPECTROGRAMS
-  // ---------------------------------------------------------
-  RenderSpectrograms(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: MEMORY PROFILER
-  // ---------------------------------------------------------
-  RenderMemoryProfiler(uiPlotState);
-
-  // ---------------------------------------------------------
-  // UI: CONTROL ELEMENTS (Tier 4)
-  // ---------------------------------------------------------
-  RenderButtonControls(uiPlotState, menuBarHeight);
-  RenderToggleControls(uiPlotState, menuBarHeight);
-  RenderTextInputControls(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: IMAGE WINDOWS
-  // ---------------------------------------------------------
-  RenderImageWindows(uiPlotState, menuBarHeight);
-
-  // ---------------------------------------------------------
-  // UI: TIME SLIDER (Offline Mode Only)
-  // ---------------------------------------------------------
-  RenderTimeSlider();
-
-  // ---------------------------------------------------------
-  // UI: FILE DIALOGS
-  // ---------------------------------------------------------
-  RenderFileDialogs(uiPlotState);
-
-  // ---------------------------------------------------------
-  // CLEANUP PHASE (The "Erase-Remove Idiom")
-  // ---------------------------------------------------------
-  uiPlotState.activePlots.erase(
-      std::remove_if(uiPlotState.activePlots.begin(), uiPlotState.activePlots.end(),
-                     [](const PlotWindow &p) { return !p.isOpen; }),
-      uiPlotState.activePlots.end());
-
-  uiPlotState.activeReadoutBoxes.erase(
-      std::remove_if(uiPlotState.activeReadoutBoxes.begin(), uiPlotState.activeReadoutBoxes.end(),
-                     [](const ReadoutBox &r) { return !r.isOpen; }),
-      uiPlotState.activeReadoutBoxes.end());
-
-  uiPlotState.activeXYPlots.erase(
-      std::remove_if(uiPlotState.activeXYPlots.begin(), uiPlotState.activeXYPlots.end(),
-                     [](const XYPlotWindow &xy) { return !xy.isOpen; }),
-      uiPlotState.activeXYPlots.end());
-
-  uiPlotState.activeHistograms.erase(
-      std::remove_if(uiPlotState.activeHistograms.begin(), uiPlotState.activeHistograms.end(),
-                     [](const HistogramWindow &h) { return !h.isOpen; }),
-      uiPlotState.activeHistograms.end());
-
-  uiPlotState.activeFFTs.erase(
-      std::remove_if(uiPlotState.activeFFTs.begin(), uiPlotState.activeFFTs.end(),
-                     [](const FFTWindow &f) { return !f.isOpen; }),
-      uiPlotState.activeFFTs.end());
-
-  uiPlotState.activeSpectrograms.erase(
-      std::remove_if(uiPlotState.activeSpectrograms.begin(), uiPlotState.activeSpectrograms.end(),
-                     [](const SpectrogramWindow &s) { return !s.isOpen; }),
-      uiPlotState.activeSpectrograms.end());
-
-  uiPlotState.activeImageWindows.erase(
-      std::remove_if(uiPlotState.activeImageWindows.begin(), uiPlotState.activeImageWindows.end(),
-                     [](const ImageWindow &img) { return !img.isOpen; }),
-      uiPlotState.activeImageWindows.end());
-
-  uiPlotState.activeButtons.erase(
-      std::remove_if(uiPlotState.activeButtons.begin(), uiPlotState.activeButtons.end(),
-                     [](const ButtonControl &b) { return !b.isOpen; }),
-      uiPlotState.activeButtons.end());
-
-  uiPlotState.activeToggles.erase(
-      std::remove_if(uiPlotState.activeToggles.begin(), uiPlotState.activeToggles.end(),
-                     [](const ToggleControl &t) { return !t.isOpen; }),
-      uiPlotState.activeToggles.end());
-
-  uiPlotState.activeTextInputs.erase(
-      std::remove_if(uiPlotState.activeTextInputs.begin(), uiPlotState.activeTextInputs.end(),
-                     [](const TextInputControl &ti) { return !ti.isOpen; }),
-      uiPlotState.activeTextInputs.end());
-
-  // Update active signal set for parser optimization
-  uiPlotState.refreshActiveSignals();
-
-  // Render
-  ImGui::Render();
-  glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-  glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
-  ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-  SDL_GL_SwapWindow(ctx->window);
 }
 
 // -------------------------------------------------------------------------
 // MAIN
 // -------------------------------------------------------------------------
-int main(int, char **) {
-  // Enable DPI awareness for high-DPI displays (4K, etc.)
-  SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+int main(int, char**) {
+    // Enable DPI awareness
+    SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
-  // Setup SDL
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) {
-    printf("Error: SDL_Init failed: %s\n", SDL_GetError());
-    return -1;
-  }
+    // Create application window
+    // ImGui_ImplWin32_EnableDpiAwareness();
+    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"SignaKit", nullptr };
+    ::RegisterClassExW(&wc);
+    HWND hwnd = ::CreateWindowW(wc.lpszClassName, L"SignaKit Analyzer", WS_OVERLAPPEDWINDOW, 100, 100, 1600, 900, nullptr, nullptr, wc.hInstance, nullptr);
 
-  // Initialize Winsock
-  WSADATA wsaData;
-  if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-    printf("WSAStartup failed\n");
-    return -1;
-  }
-
-  const char *glsl_version = "#version 130";
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-  SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-
-  SDL_WindowFlags window_flags =
-      (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
-                        SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_MAXIMIZED);
-  SDL_Window *window =
-      SDL_CreateWindow("SignaKit Analyzer", SDL_WINDOWPOS_CENTERED,
-                       SDL_WINDOWPOS_CENTERED, 1600, 900, window_flags);
-  if (window == NULL) {
-    printf("Error: SDL_CreateWindow failed: %s\n", SDL_GetError());
-    SDL_Quit();
-    return -1;
-  }
-
-  SDL_GLContext gl_context = SDL_GL_CreateContext(window);
-  if (gl_context == NULL) {
-    printf("Error: SDL_GL_CreateContext failed: %s\n", SDL_GetError());
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return -1;
-  }
-
-  SDL_GL_MakeCurrent(window, gl_context);
-  SDL_GL_SetSwapInterval(1);
-
-  // Windows-specific hints for smoother vsync and timing
-  SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
-  SDL_SetHint(SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING, "0");
-
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImPlot::CreateContext();
-
-  ImGuiIO &io = ImGui::GetIO();
-  (void)io;
-  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-
-  // --- NEW STYLING CODE START ---
-
-  // 1. Load a bigger, smoother font
-  if (!io.Fonts->AddFontFromFileTTF("Roboto-Medium.ttf", 20.0f)) {
-    printf("Warning: Could not load font Roboto-Medium.ttf, using default font\n");
-  }
-
-  // 2. Apply our custom visual style
-  SetupImGuiStyle();
-
-  // --- NEW STYLING CODE END ---
-  ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
-  ImGui_ImplOpenGL3_Init(glsl_version);
-
-  // No initial plots - user can create them via "Add New Plot Window" button
-
-  GlobalContext ctx;
-  ctx.window = window;
-  ctx.gl_context = gl_context;
-
-  // Load Lua scripts from scripts/ directory
-  printf("Loading Lua scripts...\n");
-  luaScriptManager.setAppRunningPtr(&appRunning);  // Tier 5: Allow Lua threads to check app status
-  luaScriptManager.setSignalRegistry(&signalRegistry); // Support signal registration on script load
-  luaScriptManager.loadScriptsFromDirectory("scripts");
-
-  // Parser selection removed - Lua scripts now handle parsing directly
-
-  // Enable high-resolution timers on Windows
-  #ifdef _WIN32
-  timeBeginPeriod(1);
-  #endif
-
-  SDL_Event event;
-  while (appRunning) {
-    // Wait for an event, but timeout after 1ms to allow Lua/Network processing.
-    // Combined with timeBeginPeriod(1), this prevents 100% CPU usage while maintaining low latency.
-    if (SDL_WaitEventTimeout(&event, 16)) {
-        do {
-            ImGui_ImplSDL2_ProcessEvent(&event);
-            if (event.type == SDL_QUIT)
-                appRunning = false;
-            
-            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE) {
-                if (SDL_GetWindowFromID(event.window.windowID) == window) {
-                    appRunning = false;
-                }
-            }
-        } while (SDL_PollEvent(&event)); // Drain remaining events in this frame
+    // Initialize Direct3D
+    if (!CreateDeviceD3D(hwnd)) {
+        CleanupDeviceD3D();
+        ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+        return 1;
     }
 
-    MainLoopStep(&ctx);
-  }
+    // Show the window
+    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ::UpdateWindow(hwnd);
 
-  // Tier 5: Stop all Lua I/O threads before cleanup
-  printf("Stopping Lua threads...\n");
-  luaScriptManager.stopAllLuaThreads();
+    // Initialize ImGui
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImPlot::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable; // Optional, might complicate things for now, leave off to be safe
 
-  ImGui_ImplOpenGL3_Shutdown();
-  ImGui_ImplSDL2_Shutdown();
-  ImPlot::DestroyContext();
-  ImGui::DestroyContext();
-  SDL_GL_DeleteContext(gl_context);
-  SDL_DestroyWindow(window);
-  SDL_Quit();
+    // Setup Platform/Renderer backends
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
-  WSACleanup();
+    // Fonts and Style
+    if (!io.Fonts->AddFontFromFileTTF("Roboto-Medium.ttf", 20.0f)) {
+        printf("Warning: Could not load font Roboto-Medium.ttf, using default font\n");
+    }
+    SetupImGuiStyle();
 
-  // Cleanup timers
-  #ifdef _WIN32
-  timeEndPeriod(1);
-  #endif
+    // Initialize Winsock (needed for sockpp/lua sockets)
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        printf("WSAStartup failed\n");
+        return -1;
+    }
 
-  return 0;
+    // Load Lua Scripts
+    printf("Loading Lua scripts...\n");
+    luaScriptManager.setAppRunningPtr(&appRunning);
+    luaScriptManager.setSignalRegistry(&signalRegistry);
+    luaScriptManager.loadScriptsFromDirectory("scripts");
+
+    // Enable high-res timer
+    timeBeginPeriod(1);
+
+    // Main loop
+    while (appRunning) {
+        MSG msg;
+        while (::PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE)) {
+            ::TranslateMessage(&msg);
+            ::DispatchMessage(&msg);
+            if (msg.message == WM_QUIT)
+                appRunning = false;
+        }
+        if (!appRunning) break;
+
+        // Handle Window Resize (Deferred)
+        if (g_ResizeWidth != 0 && g_ResizeHeight != 0) {
+            CleanupRenderTarget();
+            g_pSwapChain->ResizeBuffers(0, g_ResizeWidth, g_ResizeHeight, DXGI_FORMAT_UNKNOWN, 0);
+            g_ResizeWidth = g_ResizeHeight = 0;
+            CreateRenderTarget();
+        }
+
+        // Handle Layout Loading
+        if (!uiPlotState.pendingLoadFilename.empty()) {
+            LayoutData data;
+            if (LoadLayout(uiPlotState.pendingLoadFilename, data)) {
+                 if (!data.imguiSettings.empty()) {
+                       ImGui::LoadIniSettingsFromMemory(data.imguiSettings.c_str(), data.imguiSettings.size());
+                 }
+                 uiPlotState.activePlots = data.plots;
+                 uiPlotState.nextPlotId = data.nextPlotId;
+                 uiPlotState.activeReadoutBoxes = data.readouts;
+                 uiPlotState.nextReadoutBoxId = data.nextReadoutId;
+                 uiPlotState.activeXYPlots = data.xyPlots;
+                 uiPlotState.nextXYPlotId = data.nextXYPlotId;
+                 uiPlotState.activeHistograms = data.histograms;
+                 uiPlotState.nextHistogramId = data.nextHistogramId;
+                 uiPlotState.activeFFTs = data.ffts;
+                 uiPlotState.nextFFTId = data.nextFFTId;
+                 uiPlotState.activeSpectrograms = data.spectrograms;
+                 uiPlotState.nextSpectrogramId = data.nextSpectrogramId;
+                 uiPlotState.activeButtons = data.buttons;
+                 uiPlotState.nextButtonId = data.nextButtonId;
+                 uiPlotState.activeToggles = data.toggles;
+                 uiPlotState.nextToggleId = data.nextToggleId;
+                 uiPlotState.activeTextInputs = data.textInputs;
+                 uiPlotState.nextTextInputId = data.nextTextInputId;
+                 uiPlotState.editMode = data.editMode;
+                 uiPlotState.managedByImGui = !data.imguiSettings.empty();
+            }
+            uiPlotState.pendingLoadFilename.clear();
+        }
+
+        // Start Frame
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        // Application Logic
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+
+            frameNumber++;
+            auto currentFrameTime = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed = currentFrameTime - lastFrameTime;
+            double deltaTime = elapsed.count();
+            lastFrameTime = currentFrameTime;
+
+            int totalPlots = (int)(uiPlotState.activePlots.size() +
+                                uiPlotState.activeReadoutBoxes.size() +
+                                uiPlotState.activeXYPlots.size() +
+                                uiPlotState.activeHistograms.size() +
+                                uiPlotState.activeFFTs.size() +
+                                uiPlotState.activeSpectrograms.size());
+
+            luaScriptManager.executeFrameCallbacks(signalRegistry, frameNumber, deltaTime, totalPlots, &uiPlotState);
+
+            float menuBarHeight = ImGui::GetFrameHeight();
+            RenderMenuBar(uiPlotState);
+            RenderSignalBrowser(uiPlotState, menuBarHeight);
+            RenderTimePlots(uiPlotState, menuBarHeight);
+            RenderReadoutBoxes(uiPlotState, menuBarHeight);
+            RenderXYPlots(uiPlotState, menuBarHeight);
+            RenderHistograms(uiPlotState, menuBarHeight);
+            RenderFFTPlots(uiPlotState, menuBarHeight);
+            RenderSpectrograms(uiPlotState, menuBarHeight);
+            RenderMemoryProfiler(uiPlotState);
+            RenderButtonControls(uiPlotState, menuBarHeight);
+            RenderToggleControls(uiPlotState, menuBarHeight);
+            RenderTextInputControls(uiPlotState, menuBarHeight);
+            RenderImageWindows(uiPlotState, menuBarHeight);
+            RenderTimeSlider();
+            RenderFileDialogs(uiPlotState);
+
+            // Cleanup closed windows
+            uiPlotState.activePlots.erase(std::remove_if(uiPlotState.activePlots.begin(), uiPlotState.activePlots.end(), [](const PlotWindow &p) { return !p.isOpen; }), uiPlotState.activePlots.end());
+            uiPlotState.activeReadoutBoxes.erase(std::remove_if(uiPlotState.activeReadoutBoxes.begin(), uiPlotState.activeReadoutBoxes.end(), [](const ReadoutBox &r) { return !r.isOpen; }), uiPlotState.activeReadoutBoxes.end());
+            uiPlotState.activeXYPlots.erase(std::remove_if(uiPlotState.activeXYPlots.begin(), uiPlotState.activeXYPlots.end(), [](const XYPlotWindow &xy) { return !xy.isOpen; }), uiPlotState.activeXYPlots.end());
+            uiPlotState.activeHistograms.erase(std::remove_if(uiPlotState.activeHistograms.begin(), uiPlotState.activeHistograms.end(), [](const HistogramWindow &h) { return !h.isOpen; }), uiPlotState.activeHistograms.end());
+            uiPlotState.activeFFTs.erase(std::remove_if(uiPlotState.activeFFTs.begin(), uiPlotState.activeFFTs.end(), [](const FFTWindow &f) { return !f.isOpen; }), uiPlotState.activeFFTs.end());
+            uiPlotState.activeSpectrograms.erase(std::remove_if(uiPlotState.activeSpectrograms.begin(), uiPlotState.activeSpectrograms.end(), [](const SpectrogramWindow &s) { return !s.isOpen; }), uiPlotState.activeSpectrograms.end());
+            uiPlotState.activeImageWindows.erase(std::remove_if(uiPlotState.activeImageWindows.begin(), uiPlotState.activeImageWindows.end(), [](const ImageWindow &img) { return !img.isOpen; }), uiPlotState.activeImageWindows.end());
+            uiPlotState.activeButtons.erase(std::remove_if(uiPlotState.activeButtons.begin(), uiPlotState.activeButtons.end(), [](const ButtonControl &b) { return !b.isOpen; }), uiPlotState.activeButtons.end());
+            uiPlotState.activeToggles.erase(std::remove_if(uiPlotState.activeToggles.begin(), uiPlotState.activeToggles.end(), [](const ToggleControl &t) { return !t.isOpen; }), uiPlotState.activeToggles.end());
+            uiPlotState.activeTextInputs.erase(std::remove_if(uiPlotState.activeTextInputs.begin(), uiPlotState.activeTextInputs.end(), [](const TextInputControl &ti) { return !ti.isOpen; }), uiPlotState.activeTextInputs.end());
+
+            uiPlotState.refreshActiveSignals();
+        }
+
+        // Render
+        ImGui::Render();
+        const float clear_color_with_alpha[4] = { 0.1f, 0.1f, 0.1f, 1.0f }; // Background color
+        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+        g_pSwapChain->Present(1, 0); // VSync on
+    }
+
+    // Cleanup
+    luaScriptManager.stopAllLuaThreads();
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImPlot::DestroyContext();
+    ImGui::DestroyContext();
+
+    CleanupDeviceD3D();
+    ::DestroyWindow(hwnd);
+    ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    WSACleanup();
+    timeEndPeriod(1);
+
+    return 0;
+}
+
+// Helper functions (copied from ImGui DX11 example)
+bool CreateDeviceD3D(HWND hWnd)
+{
+    DXGI_SWAP_CHAIN_DESC sd;
+    ZeroMemory(&sd, sizeof(sd));
+    sd.BufferCount = 2;
+    sd.BufferDesc.Width = 0;
+    sd.BufferDesc.Height = 0;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = hWnd;
+    sd.SampleDesc.Count = 1;
+    sd.SampleDesc.Quality = 0;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+    UINT createDeviceFlags = 0;
+    //createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+    D3D_FEATURE_LEVEL featureLevel;
+    const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
+    HRESULT res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+    if (res == DXGI_ERROR_UNSUPPORTED) // Try high performance WARP software driver if hardware fails.
+        res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+    if (res != S_OK)
+        return false;
+
+    CreateRenderTarget();
+    return true;
+}
+
+void CleanupDeviceD3D()
+{
+    CleanupRenderTarget();
+    if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
+    if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = nullptr; }
+    if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
+}
+
+void CreateRenderTarget()
+{
+    ID3D11Texture2D* pBackBuffer;
+    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
+    pBackBuffer->Release();
+}
+
+void CleanupRenderTarget()
+{
+    if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = nullptr; }
+}
+
+// Forward declare message handler from imgui_impl_win32.cpp
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return true;
+
+    switch (msg)
+    {
+    case WM_SIZE:
+        if (wParam != SIZE_MINIMIZED)
+        {
+            g_ResizeWidth = (UINT)LOWORD(lParam);
+            g_ResizeHeight = (UINT)HIWORD(lParam);
+        }
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+            return 0;
+        break;
+    case WM_DESTROY:
+        ::PostQuitMessage(0);
+        return 0;
+    }
+    return ::DefWindowProcW(hWnd, msg, wParam, lParam);
 }

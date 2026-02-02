@@ -29,7 +29,7 @@ namespace fs = std::filesystem;
 #include "LuaCANSocket.hpp"
 
 // For image buffer updates
-#include <SDL2/SDL_opengl.h>
+#include <d3d11.h>
 #include "stb_image.h"
 
 
@@ -696,12 +696,17 @@ public:
             return false; // Window not found
         });
 
+// External access to D3D11 globals
+extern ID3D11Device* g_pd3dDevice;
+extern ID3D11DeviceContext* g_pd3dDeviceContext;
+
         lua.set_function("update_image_buffer", [this](const std::string& window_title, 
                                                         const std::string& image_data,
                                                         int width, int height,
                                                         sol::optional<std::string> format) -> bool {
             if (currentUIPlotState == nullptr) return false;
-            
+            if (!g_pd3dDevice || !g_pd3dDeviceContext) return false;
+
             // Find window by title
             for (auto& img : currentUIPlotState->activeImageWindows) {
                 if (img.title == window_title) {
@@ -715,36 +720,97 @@ public:
                     );
                     
                     if (!rgba_data) {
-                        printf("[ImageWindow] Failed to decode image data\\n");
+                        printf("[ImageWindow] Failed to decode image data\n");
                         return false;
                     }
                     
-                    // Use OpenGL functions (GL constants already defined in SDL_opengl.h)
-                    // Create or update texture
+                    // Use DX11 functions
                     if (img.textureID == 0) {
                         // Create new texture
-                        unsigned int textureID;
-                        glGenTextures(1, &textureID);
-                        glBindTexture(GL_TEXTURE_2D, textureID);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, decoded_width, decoded_height, 
-                                    0, GL_RGBA, GL_UNSIGNED_BYTE, rgba_data);
-                        img.textureID = textureID;
+                        D3D11_TEXTURE2D_DESC desc;
+                        ZeroMemory(&desc, sizeof(desc));
+                        desc.Width = decoded_width;
+                        desc.Height = decoded_height;
+                        desc.MipLevels = 1;
+                        desc.ArraySize = 1;
+                        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                        desc.SampleDesc.Count = 1;
+                        desc.Usage = D3D11_USAGE_DEFAULT;
+                        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                        desc.CPUAccessFlags = 0;
+
+                        D3D11_SUBRESOURCE_DATA subResource;
+                        subResource.pSysMem = rgba_data;
+                        subResource.SysMemPitch = desc.Width * 4;
+                        subResource.SysMemSlicePitch = 0;
+
+                        ID3D11Texture2D* pTexture = nullptr;
+                        HRESULT hr = g_pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+                        if (FAILED(hr)) { stbi_image_free(rgba_data); return false; }
+
+                        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+                        ZeroMemory(&srvDesc, sizeof(srvDesc));
+                        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                        srvDesc.Texture2D.MipLevels = 1;
+                        srvDesc.Texture2D.MostDetailedMip = 0;
+
+                        ID3D11ShaderResourceView* pTextureView = nullptr;
+                        g_pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, &pTextureView);
+                        pTexture->Release();
+
+                        img.textureID = (unsigned int)(uintptr_t)pTextureView;
+
                     } else {
-                        // Update existing texture
-                        glBindTexture(GL_TEXTURE_2D, img.textureID);
-                        
-                        // If dimensions changed, reallocate
-                        if (decoded_width != img.width || decoded_height != img.height) {
-                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, decoded_width, decoded_height,
-                                        0, GL_RGBA, GL_UNSIGNED_BYTE, rgba_data);
-                        } else {
-                            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, decoded_width, decoded_height,
-                                           GL_RGBA, GL_UNSIGNED_BYTE, rgba_data);
-                        }
+                         // Check size change - if changed, we must recreate because we can't easily resize a texture in place without recreating
+                         if (decoded_width != img.width || decoded_height != img.height) {
+                              extern void DeleteTexture(unsigned int);
+                              DeleteTexture(img.textureID);
+                              img.textureID = 0;
+                              // Recurse/Retry creation (simpler to just copy creation logic or goto, but let's copy for safety/speed)
+                                D3D11_TEXTURE2D_DESC desc;
+                                ZeroMemory(&desc, sizeof(desc));
+                                desc.Width = decoded_width;
+                                desc.Height = decoded_height;
+                                desc.MipLevels = 1;
+                                desc.ArraySize = 1;
+                                desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                                desc.SampleDesc.Count = 1;
+                                desc.Usage = D3D11_USAGE_DEFAULT;
+                                desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                                desc.CPUAccessFlags = 0;
+
+                                D3D11_SUBRESOURCE_DATA subResource;
+                                subResource.pSysMem = rgba_data;
+                                subResource.SysMemPitch = desc.Width * 4;
+                                subResource.SysMemSlicePitch = 0;
+
+                                ID3D11Texture2D* pTexture = nullptr;
+                                HRESULT hr = g_pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+                                if (FAILED(hr)) { stbi_image_free(rgba_data); return false; }
+
+                                D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+                                ZeroMemory(&srvDesc, sizeof(srvDesc));
+                                srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                                srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                                srvDesc.Texture2D.MipLevels = 1;
+                                srvDesc.Texture2D.MostDetailedMip = 0;
+
+                                ID3D11ShaderResourceView* pTextureView = nullptr;
+                                g_pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, &pTextureView);
+                                pTexture->Release();
+                                img.textureID = (unsigned int)(uintptr_t)pTextureView;
+
+                         } else {
+                            // Update existing using UpdateSubresource
+                             ID3D11ShaderResourceView* pTextureView = (ID3D11ShaderResourceView*)(uintptr_t)img.textureID;
+                             ID3D11Resource* pResource = nullptr;
+                             pTextureView->GetResource(&pResource);
+                             if (pResource) {
+                                 g_pd3dDeviceContext->UpdateSubresource(pResource, 0, nullptr, rgba_data, decoded_width * 4, 0);
+                                 pResource->Release();
+                             }
+                         }
                     }
                     
                     img.width = decoded_width;

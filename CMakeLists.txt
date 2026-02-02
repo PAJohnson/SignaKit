@@ -23,23 +23,9 @@ else()
     message(STATUS "Link-time optimization (LTO) not supported: ${ipo_error}")
 endif()
 
-# Fetch SDL2 for Windows
+
+
 include(FetchContent)
-message(STATUS "Fetching SDL2 for Windows build...")
-
-# Force SDL2 to build as a static library
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
-
-FetchContent_Declare(
-    SDL2
-    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    GIT_TAG release-2.28.5
-)
-FetchContent_MakeAvailable(SDL2)
-set(SDL2_LIBRARIES SDL2::SDL2main SDL2::SDL2-static)
-
-find_package(OpenGL REQUIRED)
 
 # Fetch yaml-cpp
 set(YAML_CPP_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -174,14 +160,15 @@ endif()
 
 
 # ImGui Sources
+# ImGui Sources
 set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_demo.cpp
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
 )
 
 # ImPlot Sources
@@ -210,7 +197,6 @@ target_include_directories(signakit PRIVATE
     ${IMGUI_DIR}/backends
     ${IMPLOT_DIR}
     ${IMGUIFILEDIALOG_DIR}
-    ${SDL2_INCLUDE_DIRS}
     ${LUA_INCLUDE_DIR}
     ${pffft_SOURCE_DIR}
     ${stb_SOURCE_DIR}
@@ -246,8 +232,10 @@ add_dependencies(signakit copy_scripts)
 # Link libraries - Windows only
 target_link_libraries(signakit PRIVATE
     mingw32
-    ${SDL2_LIBRARIES}
-    opengl32
+    d3d11
+    d3dcompiler
+    dwmapi
+    dxguid
     ws2_32
     wsock32
     imm32
