@@ -1009,7 +1009,7 @@ public:
     // Parse a packet using registered Lua parsers
     // NOTE: Caller must hold stateMutex lock before calling this function
     // Returns true if at least one parser handled the packet
-    // If selectedParser is not empty, only that parser will be used
+    // All registered parsers are tried until one handles the packet
     bool parsePacket(const char* buffer, size_t length, std::map<std::string, Signal>& signalRegistry, PlaybackMode mode = PlaybackMode::ONLINE, const std::string& selectedParser = "") {
         // Set the registry so Lua functions can access it
         currentSignalRegistry = &signalRegistry;
@@ -1019,12 +1019,9 @@ public:
 
         bool handled = false;
 
-        // Try each registered parser in order
+        // Try each registered parser in order until one handles it
         for (const auto& [parserName, parserFunc] : packetParsers) {
-            // If a specific parser is selected, skip others
-            if (!selectedParser.empty() && parserName != selectedParser) {
-                continue;
-            }
+            // Removed parser selection filtering - all parsers run until one handles the packet
 
             try {
                 auto result = parserFunc(bufferStr, length);
@@ -1060,9 +1057,9 @@ public:
         currentSignalRegistry = &signalRegistry;
         bool handled = false;
 
-        // Try each registered parser
+        // Try each registered parser (ignore selectedParser - let Lua scripts handle everything)
         for (const auto& [parserName, parserFunc] : packetParsers) {
-            if (!selectedParser.empty() && parserName != selectedParser) continue;
+            // Removed parser selection filtering - all parsers run until one handles the packet
 
             try {
                 // Pass pointer directly to Lua as lightuserdata
