@@ -286,6 +286,8 @@ end
 spawn(function()
     print("[DataSource] Async core loop started")
     
+    local _keepAlive = sharedBuffer
+
     while is_app_running() do
         if isOnlineMode() then
             -- Handle switching to online
