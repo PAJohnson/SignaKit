@@ -52,10 +52,7 @@ std::atomic<bool> appRunning(true);
 // Playback mode state
 PlaybackMode currentPlaybackMode = PlaybackMode::ONLINE;
 
-// Parser selection state
-std::vector<std::string> availableParsers;
-std::string selectedParser = "fast_binary";
-std::mutex parserSelectionMutex;
+// Parser selection removed - Lua scripts now handle parsing directly
 
 // Offline playback state
 struct OfflinePlaybackState {
@@ -435,8 +432,7 @@ int main(int, char **) {
   luaScriptManager.setSignalRegistry(&signalRegistry); // Support signal registration on script load
   luaScriptManager.loadScriptsFromDirectory("scripts");
 
-  // Scan available parsers for dropdown menu
-  scanAvailableParsers(availableParsers);
+  // Parser selection removed - Lua scripts now handle parsing directly
 
   // Enable high-resolution timers on Windows
   #ifdef _WIN32

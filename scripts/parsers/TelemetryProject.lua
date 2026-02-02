@@ -495,7 +495,7 @@ local function loadOfflineFile(filepath)
 
         local packetSize = getPacketSize(chunk)
         if packetSize and #chunk >= packetSize then
-            if parse_packet(chunk, #chunk) then
+            if parse_telemetry_string(chunk, packetSize) then
                 packetsProcessed = packetsProcessed + 1
                 currentPos = currentPos + packetSize
             else
@@ -525,11 +525,13 @@ local function loadOfflineFile(filepath)
 end
 
 -- ==================== PACKET PARSER ====================
+-- Direct parsing functions - no registration needed!
 
 local parser_initialized = false
 local packet_count = 0
 
-register_parser("telemetry", function(raw_ptr, len)
+-- Parse from a raw pointer (for zero-copy UDP reception)
+local function parse_telemetry_packet(raw_ptr, len)
     if not raw_ptr or len < 4 then return false end
 
     local ptr = ffi.cast("void*", raw_ptr)
@@ -606,7 +608,15 @@ register_parser("telemetry", function(raw_ptr, len)
         log(string.format("[Parser] No match for header='%s', len=%d", header, len))
     end
     return false
-end)
+end
+
+-- Parse from a string buffer (for offline file loading)
+local function parse_telemetry_string(buffer, len)
+    -- Cast string to pointer and call main parser
+    local temp_buf = ffi.new("uint8_t[?]", len)
+    ffi.copy(temp_buf, buffer, len)
+    return parse_telemetry_packet(temp_buf, len)
+end
 
 -- ==================== MAIN ASYNC LOOP ====================
 
@@ -646,14 +656,14 @@ spawn(function()
                         logFile:flush()
                     end
 
-                    parse_packet_ptr(rawPtr, len)
+                    parse_telemetry_packet(rawPtr, len)
 
                     -- Drain remaining packets
                     while true do
                         local l2, e2 = udpSocket:receive_ptr(rawPtr, RECV_BUFFER_SIZE)
                         if l2 > 0 then
                             packetsReceived = packetsReceived + 1
-                            parse_packet_ptr(rawPtr, l2)
+                            parse_telemetry_packet(rawPtr, l2)
                         else
                             break
                         end

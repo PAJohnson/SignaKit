@@ -403,10 +403,7 @@ public:
         // Expose the signal registry API
         exposeSignalAPI();
 
-        // Expose packet parser registration API
-        lua.set_function("register_parser", [this](const std::string& parserName, sol::main_protected_function func) {
-            registerPacketParser(parserName, func);
-        });
+        // Parser registration removed - Lua scripts now parse data directly
 
         // Optimization: Check if a signal is active in the UI
         lua.set_function("is_signal_active", [this](const std::string& name) -> bool {
@@ -629,17 +626,7 @@ public:
         });
 
         // Tier 5: Remaining System APIs
-        lua.set_function("parse_packet", [this](const std::string& b, size_t l) -> bool {
-            if (currentSignalRegistry == nullptr) return false;
-            return parsePacket(b.c_str(), l, *currentSignalRegistry);
-        });
-
-        lua.set_function("parse_packet_ptr", [this](void* ptr, size_t length) -> bool {
-            if (ptr == nullptr) return false;
-            auto* registry = currentSignalRegistry ? currentSignalRegistry : defaultSignalRegistry;
-            if (registry == nullptr) return false;
-            return parsePacket(ptr, length, *registry, "fast_binary");
-        });
+        // parse_packet and parse_packet_ptr removed - Lua scripts now parse data directly
 
         lua.set_function("sleep_ms", [this](int ms) { sleepMs(ms); });
         lua.set_function("is_app_running", [this]() -> bool { return isAppRunning(); });
@@ -840,8 +827,8 @@ public:
         // Execute cleanup callbacks before clearing state
         executeCleanupCallbacks();
 
-        // Clear all callbacks and parsers (they'll be re-registered by scripts)
-        packetParsers.clear();
+        // Clear all callbacks (they'll be re-registered by scripts)
+        // packetParsers removed - no longer needed
         frameCallbacks.clear();
         alerts.clear();
         cleanupCallbacks.clear();
@@ -1007,88 +994,8 @@ public:
     }
 
     // Parse a packet using registered Lua parsers
-    // NOTE: Caller must hold stateMutex lock before calling this function
-    // Returns true if at least one parser handled the packet
-    // All registered parsers are tried until one handles the packet
-    bool parsePacket(const char* buffer, size_t length, std::map<std::string, Signal>& signalRegistry, PlaybackMode mode = PlaybackMode::ONLINE, const std::string& selectedParser = "") {
-        // Set the registry so Lua functions can access it
-        currentSignalRegistry = &signalRegistry;
-
-        // Copy buffer into Lua string for safe memory handling
-        std::string bufferStr(buffer, length);
-
-        bool handled = false;
-
-        // Try each registered parser in order until one handles it
-        for (const auto& [parserName, parserFunc] : packetParsers) {
-            // Removed parser selection filtering - all parsers run until one handles the packet
-
-            try {
-                auto result = parserFunc(bufferStr, length);
-
-                if (!result.valid()) {
-                    sol::error err = result;
-                    printf("[LuaScriptManager] Parser '%s' error: %s\n", parserName.c_str(), err.what());
-                    continue;
-                }
-
-                // Check if parser handled the packet (returned true)
-                if (result.return_count() > 0) {
-                    sol::object retVal = result;
-                    if (retVal.is<bool>() && retVal.as<bool>()) {
-                        handled = true;
-                        break; // First parser that handles it wins
-                    }
-                }
-            } catch (const std::exception& e) {
-                printf("[LuaScriptManager] Exception in parser '%s': %s\n", parserName.c_str(), e.what());
-            }
-        }
-
-        // Clear the registry pointer
-        // currentSignalRegistry = nullptr;
-
-        return handled;
-    }
-
-    // Tier 5: Zero-Copy Packet Parsing (FFI Support)
-    // Returns true if handled.
-    bool parsePacket(const void* data, size_t length, std::map<std::string, Signal>& signalRegistry, const std::string& selectedParser = "") {
-        currentSignalRegistry = &signalRegistry;
-        bool handled = false;
-
-        // Try each registered parser (ignore selectedParser - let Lua scripts handle everything)
-        for (const auto& [parserName, parserFunc] : packetParsers) {
-            // Removed parser selection filtering - all parsers run until one handles the packet
-
-            try {
-                // Pass pointer directly to Lua as lightuserdata
-                auto result = parserFunc(data, length);
-                
-                if (result.valid() && result.return_count() > 0) {
-                    sol::object retVal = result;
-                    if (retVal.is<bool>() && retVal.as<bool>()) {
-                        handled = true;
-                        break;
-                    }
-                } else if (!result.valid()) {
-                    sol::error err = result;
-                    printf("[LuaScriptManager] FFI parser '%s' error: %s\n", parserName.c_str(), err.what());
-                }
-            } catch (const std::exception& e) {
-                printf("[LuaScriptManager] Exception in FFI parser '%s': %s\n", parserName.c_str(), e.what());
-            }
-        }
-        
-        static int parseFailCounter = 0;
-        if (!handled && length > 0) {
-            if (parseFailCounter++ % 1000 == 0) {
-                printf("[LuaScriptManager] Warning: No parser handled packet of length %zu (total unhandled: %d)\n", length, parseFailCounter);
-            }
-        }
-
-        return handled;
-    }
+    // REMOVED: parsePacket methods - Lua scripts now parse data directly without C++ callbacks
+    // This eliminates the circular Lua->C++->Lua dependency and simplifies the architecture
 
     void setAppRunningPtr(std::atomic<bool>* ptr) {
         appRunningPtr = ptr;
@@ -1136,8 +1043,7 @@ private:
     std::vector<CoroutineEntry> spawnQueue;
     std::mutex activeCoroutinesMut;
 
-    // Vector of registered packet parsers: (parserName, parserFunction)
-    std::vector<std::pair<std::string, sol::main_protected_function>> packetParsers;
+    // REMOVED: packetParsers vector - Lua scripts now parse data directly
 
     // Tier 3: Frame callbacks
     std::vector<sol::main_protected_function> frameCallbacks;
@@ -1595,13 +1501,7 @@ private:
         }
     }
 
-    // Register a packet parser function
-    // parserName: Name of the parser (for debugging)
-    // func: Lua function that receives (buffer, length) and returns true if packet was handled
-    void registerPacketParser(const std::string& parserName, sol::main_protected_function func) {
-        packetParsers.push_back({parserName, func});
-        printf("[LuaScriptManager] Registered packet parser: %s\n", parserName.c_str());
-    }
+    // REMOVED: registerPacketParser - Lua scripts now parse data directly
 
     void sleepMs(int milliseconds) {
         std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
